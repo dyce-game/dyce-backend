@@ -10,6 +10,7 @@ import { DbModule } from './db/db.module.ts';
 import { HealthController } from './health/health.controller.ts';
 import { LedgerModule } from './ledger/ledger.module.ts';
 import { SocialModule } from './social/social.module.ts';
+import { WalletModule } from './wallet/wallet.module.ts';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { SocialModule } from './social/social.module.ts';
     AuthModule,
     SocialModule,
     ChatModule,
+    WalletModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

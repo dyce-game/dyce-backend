@@ -547,6 +547,94 @@ try {
   r = await call('POST', '/onboarding/steps/notifications', { token: s1.accessToken });
   assert.equal(r.json.nextStep, 'done');
 
+  // ---- wallet: send, request by code, pay a stranger's code, history and receipts -----------------
+  step = 'wallet';
+  r = await call('GET', '/wallet', { token: s1.accessToken });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.balanceKobo, 20_000_000);
+  assert.equal(r.json.topup.available, false);
+  r = await call('GET', '/wallet');
+  assert.equal(r.status, 401);
+
+  const sendKey = `e2e-send-${randomUUID()}`;
+  r = await call('POST', '/wallet/send', {
+    token: s1.accessToken,
+    body: { toUserId: s3.userId, amountKobo: 150_000, note: 'suya', idempotencyKey: sendKey },
+  });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.balanceKobo, 19_850_000);
+  const sendTxn = r.json.txnId;
+  r = await call('POST', '/wallet/send', {
+    token: s1.accessToken,
+    body: { toUserId: s3.userId, amountKobo: 150_000, note: 'suya', idempotencyKey: sendKey },
+  });
+  assert.equal(r.json.replayed, true, 'a retried send moved money twice');
+  assert.equal(r.json.balanceKobo, 19_850_000);
+
+  r = await call('POST', '/wallet/send', {
+    token: s1.accessToken,
+    body: { toUserId: s2.userId, amountKobo: 100, idempotencyKey: `e2e-${randomUUID()}` },
+  });
+  assert.equal(r.status, 403, 'you can only pay people you can already talk to');
+  assert.equal(r.json.code, 'recipient_not_reachable');
+  r = await call('POST', '/wallet/send', {
+    token: s1.accessToken,
+    body: { toUserId: s3.userId, amountKobo: 99_999_999, idempotencyKey: `e2e-${randomUUID()}` },
+  });
+  assert.equal(r.status, 429);
+  assert.equal(r.json.code, 'over_send_limit');
+  r = await call('POST', '/wallet/send', {
+    token: s1.accessToken,
+    body: { toUserId: s3.userId, amountKobo: 1.5, idempotencyKey: 'short' },
+  });
+  assert.equal(r.status, 422);
+
+  // the card appears in the chat between the two
+  r = await call('GET', '/conversations', { token: s3.accessToken });
+  const cardChat = r.json.conversations.find((c) => c.peer.username === 'ada.o');
+  assert.equal(cardChat.lastMessage.kind, 'money_sent');
+  assert.equal(cardChat.lastMessage.body, 'Sent ₦1,500 · suya');
+
+  // tunde asks by code; ada pays it; a stranger can look but not read receipts
+  r = await call('POST', '/wallet/requests', {
+    token: s3.accessToken,
+    body: { amountKobo: 20_000, note: 'ride', delivery: 'qr' },
+  });
+  assert.equal(r.status, 200, r.text);
+  const reqCode = r.json.code;
+  assert.match(reqCode, /^[A-Z2-7]{10}$/);
+  r = await call('GET', `/wallet/requests/${reqCode.toLowerCase()}`, { token: s1.accessToken });
+  assert.equal(r.json.requester.username, 'tunde.c');
+  assert.equal(r.json.amountKobo, 20_000);
+  r = await call('POST', `/wallet/requests/${reqCode}/pay`, {
+    token: s1.accessToken,
+    body: { idempotencyKey: `e2e-pay-${randomUUID()}` },
+  });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.balanceKobo, 19_830_000);
+  r = await call('POST', `/wallet/requests/${reqCode}/pay`, {
+    token: s1.accessToken,
+    body: { idempotencyKey: `e2e-pay-${randomUUID()}` },
+  });
+  assert.equal(r.status, 409);
+  assert.equal(r.json.code, 'request_already_paid');
+  r = await call('GET', '/wallet/requests/AAAAAAAAAA', { token: s1.accessToken });
+  assert.equal(r.status, 404);
+
+  r = await call('GET', '/wallet/history?filter=sent', { token: s1.accessToken });
+  assert.deepEqual(
+    r.json.items.map((i) => [i.kind, i.amountKobo]),
+    [
+      ['request_payment', -20_000],
+      ['transfer', -150_000],
+    ],
+  );
+  r = await call('GET', `/wallet/transactions/${sendTxn}`, { token: s3.accessToken });
+  assert.equal(r.status, 200);
+  assert.equal(r.json.direction, 'in');
+  r = await call('GET', `/wallet/transactions/${sendTxn}`, { token: s2.accessToken });
+  assert.equal(r.status, 404, "someone else's receipt");
+
   // a user who comes back later resumes exactly where they were
   step = 'resume';
   // (the second user picked a username in the messaging step and went no further)

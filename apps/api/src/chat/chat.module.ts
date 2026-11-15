@@ -46,5 +46,6 @@ export class RealtimeLifecycle implements OnApplicationBootstrap, OnApplicationS
     },
     RealtimeLifecycle,
   ],
+  exports: [MessagesService],
 })
 export class ChatModule {}

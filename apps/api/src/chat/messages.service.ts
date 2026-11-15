@@ -6,6 +6,8 @@ import type {
   ConversationsResponse,
   Message,
   MessagesResponse,
+  MoneyRequestPayload,
+  MoneySentPayload,
   RealtimeEvent,
   Relationship,
 } from '@dyce/shared';
@@ -31,18 +33,29 @@ type MessageRow = {
   id: string;
   conversation_id: string;
   sender_id: string;
+  kind: Message['kind'];
   body: string;
+  payload: unknown;
   created_at: Date;
 };
 
-const toMessage = (r: MessageRow): Message => ({
-  id: r.id,
-  conversationId: r.conversation_id,
-  senderId: r.sender_id,
-  kind: 'text',
-  body: r.body,
-  createdAt: r.created_at.toISOString(),
-});
+const toMessage = (r: MessageRow): Message => {
+  const base = {
+    id: r.id,
+    conversationId: r.conversation_id,
+    senderId: r.sender_id,
+    body: r.body,
+    createdAt: r.created_at.toISOString(),
+  };
+  switch (r.kind) {
+    case 'money_sent':
+      return { ...base, kind: 'money_sent', payload: r.payload as MoneySentPayload };
+    case 'money_request':
+      return { ...base, kind: 'money_request', payload: r.payload as MoneyRequestPayload };
+    default:
+      return { ...base, kind: 'text' };
+  }
+};
 
 type SummaryRow = {
   id: string;
@@ -54,7 +67,9 @@ type SummaryRow = {
   unread: number;
   m_id: string | null;
   m_sender: string | null;
+  m_kind: Message['kind'] | null;
   m_body: string | null;
+  m_payload: unknown;
   m_created: Date | null;
 };
 
@@ -169,7 +184,7 @@ export class MessagesService {
       cursor = `AND (created_at, id) < ($3::timestamptz, $4::uuid)`;
     }
     const r = await this.pool.query<MessageRow>(
-      `SELECT id, conversation_id, sender_id, body, created_at
+      `SELECT id, conversation_id, sender_id, kind, body, payload, created_at
          FROM messages
         WHERE conversation_id = $1 AND deleted_at IS NULL ${cursor}
         ORDER BY created_at DESC, id DESC
@@ -210,7 +225,7 @@ export class MessagesService {
       await this.assertReachable(c, userId, peerId);
 
       const existing = await c.query<MessageRow>(
-        `SELECT id, conversation_id, sender_id, body, created_at FROM messages WHERE id = $1`,
+        `SELECT id, conversation_id, sender_id, kind, body, payload, created_at FROM messages WHERE id = $1`,
         [input.id],
       );
       const prior = existing.rows[0];
@@ -234,7 +249,7 @@ export class MessagesService {
       const inserted = await c.query<MessageRow>(
         `INSERT INTO messages (id, conversation_id, sender_id, kind, body, created_at)
          VALUES ($1, $2, $3, 'text', $4, $5)
-         RETURNING id, conversation_id, sender_id, body, created_at`,
+         RETURNING id, conversation_id, sender_id, kind, body, payload, created_at`,
         [input.id, conversationId, userId, input.body, now],
       );
       await c.query(`UPDATE conversations SET last_message_at = $2 WHERE id = $1`, [
@@ -256,6 +271,84 @@ export class MessagesService {
       this.safePublish(targets, { type: 'message', message: result.message });
     }
     return result.message;
+  }
+
+  /**
+   * Posts a money card (sent / requested) into the conversation. Not subject to the stranger limits: the
+   * money movement already passed its own checks. `input.id` is the transaction or request id, so posting
+   * twice (a retried payment) stores one card. Live delivery goes to both people unless the other ignored
+   * the conversation.
+   */
+  async postCard(
+    conversationId: string,
+    senderId: string,
+    input:
+      | { id: string; kind: 'money_sent'; body: string; payload: MoneySentPayload }
+      | { id: string; kind: 'money_request'; body: string; payload: MoneyRequestPayload },
+  ): Promise<Message> {
+    const now = this.clock();
+    const result = await withTx(this.pool, async (c) => {
+      const seat = await this.seat(c, senderId, conversationId);
+      const inserted = await c.query<MessageRow>(
+        `INSERT INTO messages (id, conversation_id, sender_id, kind, body, payload, created_at)
+         VALUES ($1, $2, $3, $4::message_kind, $5, $6::jsonb, $7)
+         ON CONFLICT (id) DO NOTHING
+         RETURNING id, conversation_id, sender_id, kind, body, payload, created_at`,
+        [
+          input.id,
+          conversationId,
+          senderId,
+          input.kind,
+          input.body,
+          JSON.stringify(input.payload),
+          now,
+        ],
+      );
+      const row =
+        inserted.rows[0] ??
+        (
+          await c.query<MessageRow>(
+            `SELECT id, conversation_id, sender_id, kind, body, payload, created_at FROM messages WHERE id = $1`,
+            [input.id],
+          )
+        ).rows[0]!;
+      if (inserted.rows[0]) {
+        await c.query(`UPDATE conversations SET last_message_at = $2 WHERE id = $1`, [
+          conversationId,
+          now,
+        ]);
+      }
+      return {
+        message: toMessage(row),
+        fresh: Boolean(inserted.rows[0]),
+        notify: effective(seat.peerState, seat.friends) !== 'declined',
+        peerId: seat.peerId,
+      };
+    });
+    if (result.fresh) {
+      this.safePublish(result.notify ? [senderId, result.peerId] : [senderId], {
+        type: 'message',
+        message: result.message,
+      });
+    }
+    return result.message;
+  }
+
+  /** Updates a card's status (a request that was paid, cancelled or expired) and tells both people. */
+  async updateCardPayload(messageId: string, patch: Record<string, unknown>): Promise<void> {
+    const r = await this.pool.query<MessageRow & { peer_a: string; peer_b: string }>(
+      `UPDATE messages SET payload = payload || $2::jsonb, edited_at = $3
+        WHERE id = $1 AND kind = 'money_request'
+        RETURNING id, conversation_id, sender_id, kind, body, payload, created_at,
+                  sender_id AS peer_a,
+                  (SELECT user_id FROM conversation_members
+                    WHERE conversation_id = messages.conversation_id AND user_id <> messages.sender_id) AS peer_b`,
+      [messageId, JSON.stringify(patch), this.clock()],
+    );
+    const row = r.rows[0];
+    if (row) {
+      this.safePublish([row.peer_a, row.peer_b], { type: 'message', message: toMessage(row) });
+    }
   }
 
   /** Marks everything up to now as read. Only an accepted conversation tells the sender. */
@@ -509,7 +602,8 @@ export class MessagesService {
                   WHERE x.conversation_id = c.id AND x.sender_id <> $1::uuid AND x.deleted_at IS NULL
                     AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at)
                   LIMIT 99) s) AS unread,
-              lm.id AS m_id, lm.sender_id AS m_sender, lm.body AS m_body, lm.created_at AS m_created
+              lm.id AS m_id, lm.sender_id AS m_sender, lm.kind AS m_kind, lm.body AS m_body,
+              lm.payload AS m_payload, lm.created_at AS m_created
          FROM conversation_members m
          JOIN conversations c ON c.id = m.conversation_id AND c.kind = 'direct'
          JOIN conversation_members o ON o.conversation_id = c.id AND o.user_id <> $1::uuid
@@ -517,7 +611,7 @@ export class MessagesService {
          JOIN profiles p ON p.id = u.id
          ${FRIENDSHIP_JOIN}
          LEFT JOIN LATERAL (
-           SELECT id, sender_id, body, created_at FROM messages
+           SELECT id, sender_id, kind, body, payload, created_at FROM messages
             WHERE conversation_id = c.id AND deleted_at IS NULL
             ORDER BY created_at DESC, id DESC LIMIT 1) lm ON true
         WHERE ${where}
@@ -550,12 +644,14 @@ function toSummary(row: SummaryRow): ConversationSummary {
     },
     state,
     lastMessage:
-      row.m_id && row.m_sender && row.m_body !== null && row.m_created
+      row.m_id && row.m_sender && row.m_kind && row.m_body !== null && row.m_created
         ? toMessage({
             id: row.m_id,
             conversation_id: row.id,
             sender_id: row.m_sender,
+            kind: row.m_kind,
             body: row.m_body,
+            payload: row.m_payload,
             created_at: row.m_created,
           })
         : null,

@@ -7,3 +7,4 @@ export * from './schemas/auth.ts';
 export * from './schemas/contacts.ts';
 export * from './schemas/friends.ts';
 export * from './schemas/messages.ts';
+export * from './schemas/wallet.ts';

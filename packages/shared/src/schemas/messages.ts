@@ -37,15 +37,32 @@ export const listConversationsQuerySchema = z.object({
   filter: conversationFilterSchema.default('all'),
 });
 
-export type Message = {
+/** What a money card in a chat carries (the card text is in `body`, e.g. "Sent ₦5,000"). */
+export type MoneySentPayload = { amountKobo: number; note: string; txnId: string };
+export type MoneyRequestPayload = {
+  /** null = any amount. */
+  amountKobo: number | null;
+  note: string;
+  code: string;
+  status: 'open' | 'paid' | 'expired' | 'cancelled';
+  expiresAt: string;
+};
+
+type MessageBase = {
   id: string;
   conversationId: string;
   senderId: string;
-  kind: 'text';
   body: string;
   /** ISO timestamp, set by the server. */
   createdAt: string;
 };
+
+export type Message =
+  | (MessageBase & { kind: 'text'; payload?: undefined })
+  | (MessageBase & { kind: 'money_sent'; payload: MoneySentPayload })
+  | (MessageBase & { kind: 'money_request'; payload: MoneyRequestPayload });
+
+export type MessageKind = Message['kind'];
 
 /** `request`: someone you don't know yet wrote to you. Nothing here is shown in Chat until you accept. */
 export type ConversationState = 'active' | 'request';
