@@ -557,6 +557,86 @@ export class MatchesService {
     return this.get(userId, matchId);
   }
 
+  /**
+   * Turns an SMS invite into a normal Free match once the invitee has signed up (ADR-020). `id` is the invite's
+   * id, so a retry is harmless. With `played` (the moves a guest made in the browser, already screened) the new
+   * user's turn is replayed through the engine on the guest's own seed: they keep their score and the inviter
+   * plays next. Without it the inviter simply sends the game as a fresh invite. Returns the match id.
+   */
+  async startFromInvite(input: {
+    id: string;
+    inviterId: string;
+    userId: string;
+    conversationId: string;
+    gameSlug: string;
+    seed: string;
+    played: { action: unknown; at: Date }[] | null;
+  }): Promise<string> {
+    const entry = this.engineFor(input.gameSlug);
+    if (!input.played || input.played.length === 0) {
+      await this.create(input.inviterId, {
+        id: input.id,
+        conversationId: input.conversationId,
+        gameSlug: input.gameSlug,
+        mode: 'free',
+      });
+      return input.id;
+    }
+    const { engine } = entry;
+    const now = this.clock();
+    await withTx(this.pool, async (c) => {
+      await lockPair(c, input.inviterId, input.userId);
+      const exists = await c.query(`SELECT 1 FROM matches WHERE id = $1`, [input.id]);
+      if (exists.rows[0]) return; // a retry
+      let state = engine.init([input.inviterId, input.userId], BigInt(input.seed), entry.cfg);
+      for (const m of input.played!) {
+        const verdict = engine.validate(state, input.userId, m.action);
+        if (!verdict.ok) throw new Error(`guest run no longer valid: ${verdict.code}`);
+        state = engine.apply(state, input.userId, m.action);
+      }
+      if (engine.isTerminal(state)) throw new Error('a guest run must leave the inviter to play');
+      const turn = engine.currentPlayers(state)[0] ?? null;
+      await c.query(
+        `INSERT INTO matches (id, game_slug, mode, stake_kobo, allow_counter, status, conversation_id, seed,
+                              state, state_version, current_turn, created_by, created_at)
+         VALUES ($1, $2, 'free', 0, false, 'active', $3, $4, $5::jsonb, $6, $7, $8, $9)`,
+        [
+          input.id,
+          input.gameSlug,
+          input.conversationId,
+          input.seed,
+          JSON.stringify(state),
+          input.played!.length,
+          turn,
+          input.inviterId,
+          now,
+        ],
+      );
+      await c.query(
+        `INSERT INTO match_players (match_id, user_id, seat, accepted_at) VALUES
+           ($1, $2, 1, $4), ($1, $3, 2, $4)`,
+        [input.id, input.inviterId, input.userId, now],
+      );
+      let seq = 0;
+      for (const m of input.played!) {
+        seq += 1;
+        await c.query(
+          `INSERT INTO match_moves (match_id, seq, user_id, action, created_at) VALUES ($1, $2, $3, $4::jsonb, $5)`,
+          [input.id, seq, input.userId, JSON.stringify(m.action), m.at],
+        );
+      }
+    });
+    const { row, players } = await this.load(this.pool, input.id);
+    await this.chat.postCard(input.conversationId, input.inviterId, {
+      id: input.id,
+      kind: 'game',
+      body: `${row.game_name} · Free`,
+      payload: cardPayload(row, players),
+    });
+    this.publishMatch(row, players);
+    return input.id;
+  }
+
   // ---- internals ------------------------------------------------------------------------------
 
   private entry(slug: string): EngineEntry | null {

@@ -40,5 +40,6 @@ export class MatchMaintenance {
       useFactory: (matches: MatchesService) => new MatchMaintenance(matches),
     },
   ],
+  exports: [MatchesService],
 })
 export class MatchesModule {}

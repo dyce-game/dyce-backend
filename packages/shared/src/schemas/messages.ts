@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { PublicUser } from './contacts.ts';
 import type { GameCardPayload, MatchView } from './games.ts';
+import type { SpaceView } from './spaces.ts';
 
 /** Longest text message, in characters. */
 export const MAX_MESSAGE_LENGTH = 4000;
@@ -105,7 +106,9 @@ export type RealtimeEvent =
   | { type: 'read'; conversationId: string; userId: string; at: string }
   | { type: 'typing'; conversationId: string; userId: string; typing: boolean }
   /** A match you're in changed (accepted, moved, finished). Each player gets their own view of it. */
-  | { type: 'match'; match: MatchView };
+  | { type: 'match'; match: MatchView }
+  /** A space you're in changed (someone sat down or left, it started, it ended). */
+  | { type: 'space'; space: SpaceView };
 
 /** Client to server. The first frame must be `auth`. */
 export type RealtimeClientFrame =

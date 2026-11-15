@@ -1,4 +1,5 @@
 import {
+  cupPongEngine,
   pigEngine,
   wordHuntEngine,
   WORD_HUNT_ROUND_MS,
@@ -60,5 +61,11 @@ export const ENGINES: Record<string, EngineEntry> = {
     engine: wordHuntEngine as unknown as AnyEngine,
     cfg: { roundMs: WORD_HUNT_ROUND_MS, minWords: 25 },
     screenAction: screenWordHunt,
+  },
+  'cup-pong': {
+    engine: cupPongEngine as unknown as AnyEngine,
+    // Three balls a turn, at most 12 rounds (the engine's own defaults, written down so a later change to
+    // them can't alter matches already running: the config is captured in each match's state).
+    cfg: { ballsPerTurn: 3, maxRounds: 12 },
   },
 };

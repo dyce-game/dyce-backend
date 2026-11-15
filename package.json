@@ -11,7 +11,7 @@
     "dev": "turbo run dev --parallel",
     "build": "turbo run build",
     "test": "turbo run test",
-    "test:db": "pnpm -F @dyce/api test:db",
+    "test:db": "pnpm -F @dyce/api test:db && pnpm -F @dyce/game-server test:db",
     "test:determinism": "pnpm -F @dyce/games determinism",
     "e2e": "pnpm -F @dyce/api e2e",
     "lint": "turbo run lint",

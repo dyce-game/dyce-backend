@@ -17,3 +17,4 @@ export {
   type ThrowSim as CupPongSim,
 } from './cuppong/physics.ts';
 export * from './determinism/scenario.ts';
+export * from './live.ts';

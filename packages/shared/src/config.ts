@@ -34,6 +34,10 @@ export const appConfigSchema = z.object({
   stranger_requests_per_day: z.number().int().default(20),
   money_requests_per_day: z.number().int().default(30),
   sms_invites_per_day: z.number().int().default(50),
+  /** SMS invites any one phone number may receive per rolling day, from everyone. */
+  sms_invites_per_number_per_day: z.number().int().default(3),
+  /** An SMS invite link stops working after this many days. */
+  invite_ttl_days: z.number().int().default(7),
   stranger_scans_per_day: z.number().int().default(20),
   /** Numbers a user may ask us to look up per day (contact matching is a membership oracle). */
   contact_lookups_per_day: z.number().int().default(10_000),

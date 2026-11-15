@@ -34,6 +34,13 @@ export const envSchema = z
     TWILIO_MESSAGING_SERVICE_SID: optional(z.string().min(1)),
     /** Comma-separated browser origins allowed to call the API (web guest game, local web dev). Empty = none. */
     CORS_ORIGINS: optional(z.string()),
+    /** Where invite links point: the web build that hosts /i/<token> (https://dyce.games in production). */
+    INVITE_BASE_URL: z.url().default('https://dyce.games'),
+    /** Live Spaces: where the Colyseus game server listens for our signed room requests, and the public
+     *  ws(s) URL handed to apps. Without INTERNAL_SECRET (>= 32 chars) rooms cannot be started. */
+    GAME_SERVER_URL: optional(z.url()),
+    GAME_SERVER_PUBLIC_URL: optional(z.string().regex(/^wss?:\/\//)),
+    INTERNAL_SECRET: optional(z.string().min(32)),
     /** Number of reverse-proxy hops to trust for client IPs (rate limiting). 0 = none. */
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   })

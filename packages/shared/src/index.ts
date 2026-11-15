@@ -12,3 +12,5 @@ export * from './schemas/safety.ts';
 export * from './schemas/avatar.ts';
 export * from './schemas/profile.ts';
 export * from './schemas/games.ts';
+export * from './schemas/spaces.ts';
+export * from './schemas/invites.ts';

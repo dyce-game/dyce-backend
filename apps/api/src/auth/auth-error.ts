@@ -49,7 +49,32 @@ export type AuthErrorCode =
   | 'not_your_turn'
   | 'stale_version'
   | 'invalid_action'
-  | 'illegal_move';
+  | 'illegal_move'
+  // spaces
+  | 'space_not_found'
+  | 'space_id_taken'
+  | 'space_full'
+  | 'space_not_open'
+  | 'space_live'
+  | 'space_friends_only'
+  | 'space_removed'
+  | 'not_space_host'
+  | 'not_enough_players'
+  | 'invalid_seats'
+  | 'invalid_payout'
+  | 'spaces_limit'
+  | 'room_unavailable'
+  // invites and the guest web game
+  | 'invite_not_found'
+  | 'invite_expired'
+  | 'invite_used'
+  | 'already_on_dyce'
+  | 'invite_rate_limited'
+  | 'invite_number_limited'
+  | 'invite_too_soon'
+  | 'guest_unauthorized'
+  | 'guest_already_played'
+  | 'guest_game_unavailable';
 
 const STATUS: Record<AuthErrorCode, number> = {
   validation_failed: 422,
@@ -98,6 +123,29 @@ const STATUS: Record<AuthErrorCode, number> = {
   stale_version: 409,
   invalid_action: 422,
   illegal_move: 422,
+  space_not_found: 404,
+  space_id_taken: 409,
+  space_full: 409,
+  space_not_open: 409,
+  space_live: 409,
+  space_friends_only: 403,
+  space_removed: 403,
+  not_space_host: 403,
+  not_enough_players: 409,
+  invalid_seats: 422,
+  invalid_payout: 422,
+  spaces_limit: 429,
+  room_unavailable: 503,
+  invite_not_found: 404,
+  invite_expired: 410,
+  invite_used: 410,
+  already_on_dyce: 409,
+  invite_rate_limited: 429,
+  invite_number_limited: 429,
+  invite_too_soon: 429,
+  guest_unauthorized: 401,
+  guest_already_played: 409,
+  guest_game_unavailable: 422,
 };
 
 /** An expected, user-facing failure. Mapped to `{ code, message, ...details }` by the HTTP filter. */
