@@ -17,10 +17,35 @@ export const createMatchSchema = z.object({
     .string()
     .min(1)
     .max(40)
-    .regex(/^[a-z0-9_]+$/),
+    .regex(/^[a-z0-9_-]+$/), // engine slugs include hyphens: word-hunt, cup-pong
   mode: matchModeSchema.default('free'),
+  /** Each player's stake in kobo. Required (and within the limits) for Pool; ignored for Free. */
+  stakeKobo: z.number().int().min(0).max(1_000_000_000).default(0),
+  /** Pool only: may the other person suggest a smaller stake (or play free) once? */
+  allowCounter: z.boolean().default(true),
 });
 export type CreateMatchRequest = z.input<typeof createMatchSchema>;
+
+/** The invitee's one counter-offer on a Pool invite: a smaller stake, or 0 to play it free. */
+export const counterMatchSchema = z.object({
+  stakeKobo: z.number().int().min(0).max(1_000_000_000),
+});
+export type CounterMatchRequest = z.infer<typeof counterMatchSchema>;
+
+/** What the app needs to build the Pool stake picker and explain a refused stake. */
+export type PoolInfo = {
+  isAdult: boolean;
+  /** False until the person has answered the age gate (it is asked once). */
+  ageAnswered: boolean;
+  minStakeKobo: number;
+  maxStakeKobo: number;
+  dailyStakeLimitKobo: number;
+  stakedTodayKobo: number;
+  dailyGamesLimit: number;
+  gamesToday: number;
+  /** Seconds until the daily Pool limits reset (midnight in Lagos). */
+  resetsInSeconds: number;
+};
 
 /**
  * One move. `expectedVersion` is the `stateVersion` the player was looking at: the server rejects the move
@@ -64,6 +89,10 @@ export type MatchPlayer = {
   result: MatchPlayerResult | null;
   /** 1 = winner. */
   placement: number | null;
+  /** What this player has locked in the pot (0 in Free). */
+  stakedKobo: number;
+  /** What came back to them: the pot for a winner, their stake on a draw, decline or expiry. Null until then. */
+  payoutKobo: number | null;
 };
 
 export type MatchOutcome = {
@@ -81,7 +110,13 @@ export type MatchView = {
   gameSlug: string;
   gameName: string;
   mode: MatchMode;
+  /** Each player's stake (0 in Free). */
   stakeKobo: number;
+  /** What the winner takes: both stakes (0 in Free). */
+  potKobo: number;
+  /** Pool: the invitee's counter-offer while the match is `countered` (0 = play free). */
+  counterStakeKobo: number | null;
+  allowCounter: boolean;
   status: MatchStatus;
   conversationId: string | null;
   createdBy: string;
@@ -103,6 +138,13 @@ export type GameCardPayload = {
   gameSlug: string;
   gameName: string;
   mode: MatchMode;
+  /** Each player's stake and the pot (both 0 in Free). */
+  stakeKobo: number;
+  potKobo: number;
+  /** The invitee's counter-offer while the match is `countered`. */
+  counterStakeKobo: number | null;
+  /** Pool: may the invitee counter? (Decides which buttons the card shows.) */
+  allowCounter: boolean;
   status: MatchStatus;
   currentTurn: string | null;
   /** null until the match has finished. */

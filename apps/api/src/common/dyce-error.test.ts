@@ -35,7 +35,8 @@ describe('migrations vs DYCE_ERROR_CODES', () => {
       join(process.cwd(), 'db/migrations/0005_money_functions.sql'),
       'utf8',
     );
-    const raised = new Set([...sql.matchAll(/'dyce:([a-z_]+)'/g)].map((m) => m[1]!));
+    const pool = await readFile(join(process.cwd(), 'db/migrations/0014_pool_matches.sql'), 'utf8');
+    const raised = new Set([...(sql + pool).matchAll(/'dyce:([a-z_]+)'/g)].map((m) => m[1]!));
     // internal-only guards that indicate a bug, not a user error
     const internal = new Set([
       'unbalanced_txn',

@@ -51,7 +51,7 @@ Wallet › Send, or the ₦ button in a chat. Pick a friend (only friends and co
 **Safety.** Codes are random and single-use (amount requests). Requests expire. A user can have at most 10 open requests. Pay sheet always shows the real profile from the server, never data inside the QR. Rate limit scans that resolve to strangers (20/day).
 
 ## 5. Pools
-Flow 1v1: sender picks stake → `stake_pool()` for the sender at invite time → invitee sees Match / Counter / Play free → Match = `stake_pool()` for invitee → match active. Counter: invitee proposes a new stake; sender's stake is adjusted (top-up or partial refund) when the counter is accepted. No response in 24h → `refund_match()`. Space pools: each seat pays the seat fee on join; leaving a waiting space refunds; once live, leaving forfeits.
+Flow 1v1: sender picks stake → `stake_pool()` for the sender at invite time → invitee sees Match / Counter / Play free → Match = `stake_pool()` for invitee → match active. Counter (ADR-018): the invitee proposes a smaller stake, or 0 to play free, once; nothing moves until the sender accepts, which gives the sender the difference back (`restake_pool`) and takes the invitee's counter stake in one transaction; declining refunds everything. No response in 24h → `refund_match()`. Space pools: each seat pays the seat fee on join; leaving a waiting space refunds; once live, leaving forfeits.
 Payout schemes: `winner_all`, `p50_30_20`, `p60_40` (by placement). No house fee in v1.
 Pool requires `is_adult` and passing daily limits (`daily_usage`). Limits are config values; users can set lower personal limits in Settings.
 

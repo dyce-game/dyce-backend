@@ -39,6 +39,10 @@ export type AuthErrorCode =
   | 'match_not_found'
   | 'match_requires_friends'
   | 'pool_not_available'
+  | 'pool_not_supported'
+  | 'invalid_stake'
+  | 'counter_not_allowed'
+  | 'opponent_cannot_stake'
   | 'match_not_open'
   | 'cannot_accept_own_invite'
   | 'open_invites_limit'
@@ -83,6 +87,10 @@ const STATUS: Record<AuthErrorCode, number> = {
   match_not_found: 404,
   match_requires_friends: 403,
   pool_not_available: 422,
+  pool_not_supported: 422,
+  invalid_stake: 422,
+  counter_not_allowed: 409,
+  opponent_cannot_stake: 409,
   match_not_open: 409,
   cannot_accept_own_invite: 403,
   open_invites_limit: 429,

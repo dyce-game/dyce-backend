@@ -19,6 +19,7 @@ export const queryKeys = {
   contactSuggestions: ['contacts', 'suggestions'] as const,
   games: ['games'] as const,
   match: (id: string) => ['match', id] as const,
+  poolInfo: ['pool-info'] as const,
   spaces: (scope: string) => ['spaces', scope] as const,
   space: (id: string) => ['space', id] as const,
   leaderboard: (scope: string) => ['leaderboard', scope] as const,

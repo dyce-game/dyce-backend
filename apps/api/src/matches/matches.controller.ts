@@ -1,9 +1,11 @@
 import { Body, Controller, Get, HttpCode, Inject, Param, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import {
+  counterMatchSchema,
   createMatchSchema,
   matchIdParamSchema,
   submitMoveSchema,
+  type CounterMatchRequest,
   type CreateMatchRequest,
   type SubmitMoveRequest,
 } from '@dyce/shared';
@@ -22,6 +24,12 @@ export class GamesController {
   @Get()
   list() {
     return this.matches.listGames();
+  }
+
+  /** Stake limits, today's Pool usage and whether the age gate was answered (the stake picker). */
+  @Get('pool')
+  pool(@CurrentUser() user: AuthContext) {
+    return this.matches.poolInfo(user.userId);
   }
 }
 
@@ -56,6 +64,17 @@ export class MatchesController {
   @HttpCode(200)
   decline(@CurrentUser() user: AuthContext, @Param('id', idPipe) id: string) {
     return this.matches.decline(user.userId, id);
+  }
+
+  /** The invitee suggests a smaller stake (0 = play free), once: `{ stakeKobo }`. */
+  @Post(':id/counter')
+  @HttpCode(200)
+  counter(
+    @CurrentUser() user: AuthContext,
+    @Param('id', idPipe) id: string,
+    @Body(new ZodPipe(counterMatchSchema)) body: CounterMatchRequest,
+  ) {
+    return this.matches.counter(user.userId, id, body);
   }
 
   /** The sender takes an unanswered invite back. */

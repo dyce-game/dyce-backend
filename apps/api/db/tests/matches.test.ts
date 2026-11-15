@@ -249,7 +249,7 @@ describe('sending a game', () => {
     await expect(send(b, conv)).rejects.toEqual(code('blocked'));
   });
 
-  it('keeps Pool for later', async () => {
+  it('needs a stake to send a Pool game (the full Pool flow is in pool-matches.test.ts)', async () => {
     const { a, conv } = await pair();
     await expect(
       matches.create(a.id, {
@@ -258,7 +258,7 @@ describe('sending a game', () => {
         gameSlug: 'test_race',
         mode: 'pool',
       }),
-    ).rejects.toEqual(code('pool_not_available'));
+    ).rejects.toEqual(code('invalid_stake'));
   });
 
   it('rejects an unknown game', async () => {

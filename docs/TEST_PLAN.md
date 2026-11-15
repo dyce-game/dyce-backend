@@ -47,6 +47,7 @@ Owner: qa-engineer. Server-side layers for `dyce-backend`; the app side is in `.
 | Settle exactly once, even concurrently | `settle twice…`, `concurrent settles pay exactly once` |
 | Refund on expiry; refund/settle exclusivity | `pool.test.ts › refund_match` |
 | Adult required, daily pool limits, frozen users | `pool.test.ts › stake_pool` |
+| Pool match end to end (stake on create and accept, refusals leave nothing behind, double tap and retry stake once, decline / cancel / expiry refunds, counter-offer paths, payout on a win, refund on a draw, retried final move; ledger invariants after each) | `pool-matches.test.ts` (ADR-018) |
 | Nightly invariant check finds a planted mismatch | `database-level safety › the invariant check finds a planted mismatch` |
 | App role cannot write money tables or call admin functions | `database-level safety › the app role cannot…` |
 | Ledger is append-only; unbalanced commit rejected; balance never negative | `database-level safety › …` |
