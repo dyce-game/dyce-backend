@@ -9,6 +9,7 @@ import { validateEnv } from './config/env.ts';
 import { DbModule } from './db/db.module.ts';
 import { HealthController } from './health/health.controller.ts';
 import { LedgerModule } from './ledger/ledger.module.ts';
+import { SafetyModule } from './safety/safety.module.ts';
 import { SocialModule } from './social/social.module.ts';
 import { WalletModule } from './wallet/wallet.module.ts';
 
@@ -24,6 +25,7 @@ import { WalletModule } from './wallet/wallet.module.ts';
     SocialModule,
     ChatModule,
     WalletModule,
+    SafetyModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],

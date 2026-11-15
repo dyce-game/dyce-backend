@@ -17,8 +17,9 @@ Owner: qa-engineer. Server-side layers for `dyce-backend`; the app side is in `.
 | Friends list, accept, ignore, cancel, remove (silent ignore, races, blocks) | Jest + real PostgreSQL | `apps/api/db/tests/friends.test.ts` | `pnpm test:db` |
 | Messaging: conversations, Requests, limits, read state, paging, blocks, races | Jest + real PostgreSQL | `apps/api/db/tests/messages.test.ts` | `pnpm test:db` |
 | Wallet: send, requests and codes, history, receipts, cards, idempotency, races, limits | Jest + real PostgreSQL | `apps/api/db/tests/wallet.test.ts` | `pnpm test:db` |
+| Block and report: blocking cuts off chat/money/friend requests, unblock, reports with evidence snapshot, duplicates, daily limit, constraints | Jest + real PostgreSQL | `apps/api/db/tests/safety.test.ts` | `pnpm test:db` |
 | Realtime hub and WebSocket server (auth frame, token expiry, typing, limits) | Jest + real sockets | `apps/api/src/chat/realtime.test.ts` | `pnpm test` |
-| Auth + contacts + friends + messaging (incl. a live WebSocket) + wallet over real HTTP (whole journey, throttling, production-safety) | script | `apps/api/scripts/auth-e2e.mjs` | `pnpm -F @dyce/api e2e` |
+| Auth + contacts + friends + messaging (incl. a live WebSocket) + wallet + block/report over real HTTP (whole journey, throttling, production-safety) | script | `apps/api/scripts/auth-e2e.mjs` | `pnpm -F @dyce/api e2e` |
 | SMS providers, env validation, tokens, hashing | Jest | `apps/api/src/**/*.test.ts` | `pnpm test` |
 | Money utils, config, phone/username/onboarding rules | Jest | `packages/shared/src/*.test.ts` | `pnpm test` |
 | Engine contract + rules + RNG | Jest + fast-check | `packages/games/src/**` | `pnpm test` |

@@ -15,8 +15,12 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 - Personal "My code" (`/u/<username>`) and paying it; Pool stake UI and disputes
 - A scheduled job that expires old requests and updates their chat cards; push for money received / requested
 
+## Safety follow-ups (deferred from ADR-013)
+- A moderation queue and the actions on a report (warn, mute, suspend), outcome notifications to the reporter
+- Hold and refund a Pool stake when cheating is reported; attach game moves as evidence once matches exist
+- Spam filtering of requests (new accounts, mass sending, reported users)
+
 ## Platform
-- Block and report endpoints, spam filtering of requests, moderation queue
 - Contact-matching opt-out ("don't let people find me by phone number"): needs a product decision (ADR-008)
 - Real Termii/Twilio delivery test; delivery reports
 - Structured logging and Sentry; a nightly job for `ledger_check_invariants`

@@ -621,7 +621,7 @@ try {
   r = await call('GET', '/wallet/requests/AAAAAAAAAA', { token: s1.accessToken });
   assert.equal(r.status, 404);
 
-  r = await call('GET', '/wallet/history?filter=sent', { token: s1.accessToken });
+  r = await call('GET', '/wallet/history?filter=transfer', { token: s1.accessToken });
   assert.deepEqual(
     r.json.items.map((i) => [i.kind, i.amountKobo]),
     [
@@ -654,6 +654,44 @@ try {
   assert.equal(r.json.code, 'refresh_reused');
   r = await call('POST', '/auth/refresh', { body: { refreshToken: rotated.refreshToken } }); // family is dead now
   assert.equal(r.status, 401);
+
+  // ---- safety: report with the chat attached and block, over real HTTP ------------------------------
+  step = 'safety';
+  r = await call('POST', '/reports', {
+    token: s1.accessToken,
+    body: { userId: s2.userId, reason: 'spam', conversationId: reqConv.id, alsoBlock: true },
+  });
+  assert.equal(r.status, 200, r.text);
+  assert.equal(r.json.blocked, true);
+  assert.match(r.json.reportId, /^[0-9a-f-]{36}$/);
+  r = await call('POST', '/reports', {
+    token: s1.accessToken,
+    body: { userId: s2.userId, reason: 'nonsense' },
+  });
+  assert.equal(r.status, 422, 'unknown reasons are refused');
+  r = await call('POST', '/reports', {
+    token: s1.accessToken,
+    body: { userId: s2.userId, reason: 'abuse', conversationId: conv.id },
+  });
+  assert.equal(r.status, 404, "you can't attach someone else's chat");
+  r = await call('GET', '/blocks', { token: s1.accessToken });
+  assert.deepEqual(
+    r.json.blocked.map((b) => b.user.username),
+    ['bisi.m'],
+  );
+  r = await call('POST', `/conversations/${reqConv.id}/messages`, {
+    token: s2.accessToken,
+    body: { id: randomUUID(), body: 'hello?' },
+  });
+  assert.equal(r.status, 404, 'a blocked person is told nothing, they just cannot reach you');
+  r = await call('GET', '/conversations?filter=all', { token: s1.accessToken });
+  assert.ok(!r.json.conversations.some((c) => c.peer.username === 'bisi.m'));
+  r = await call('DELETE', `/blocks/${s2.userId}`, { token: s1.accessToken });
+  assert.equal(r.status, 204);
+  r = await call('GET', '/blocks', { token: s1.accessToken });
+  assert.deepEqual(r.json.blocked, []);
+  r = await call('POST', '/blocks', { token: s1.accessToken, body: { userId: s1.userId } });
+  assert.equal(r.status, 422, "you can't block yourself");
 
   step = 'logout';
   r = await call('POST', '/auth/otp/verify', {

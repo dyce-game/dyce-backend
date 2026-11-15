@@ -15,6 +15,7 @@ export const queryKeys = {
   /** Prefix for everything friends-related: invalidating it refreshes the list and the requests. */
   friends: ['friends'] as const,
   friendRequests: ['friends', 'requests'] as const,
+  blocks: ['blocks'] as const,
   contactSuggestions: ['contacts', 'suggestions'] as const,
   games: ['games'] as const,
   match: (id: string) => ['match', id] as const,

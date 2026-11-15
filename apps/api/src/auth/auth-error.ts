@@ -31,7 +31,9 @@ export type AuthErrorCode =
   | 'message_requests_rate_limited'
   // wallet
   | 'recipient_not_reachable'
-  | 'transaction_not_found';
+  | 'transaction_not_found'
+  // safety
+  | 'reports_rate_limited';
 
 const STATUS: Record<AuthErrorCode, number> = {
   validation_failed: 422,
@@ -64,6 +66,7 @@ const STATUS: Record<AuthErrorCode, number> = {
   message_requests_rate_limited: 429,
   recipient_not_reachable: 403,
   transaction_not_found: 404,
+  reports_rate_limited: 429,
 };
 
 /** An expected, user-facing failure. Mapped to `{ code, message, ...details }` by the HTTP filter. */
