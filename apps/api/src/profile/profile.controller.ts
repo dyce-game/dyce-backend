@@ -6,6 +6,7 @@ import {
   Inject,
   Param,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -14,9 +15,11 @@ import {
   ageGateSchema,
   clientStepSchema,
   profileCreateSchema,
+  setAvatarSchema,
   usernameSchema,
   type ClientStep,
   type ProfileCreate,
+  type SetAvatarRequest,
 } from '@dyce/shared';
 import { AuthGuard, CurrentUser, type AuthContext } from '../auth/auth.guard.ts';
 import { ZodPipe } from '../common/zod.pipe.ts';
@@ -56,6 +59,15 @@ export class ProfileController {
     @Body(new ZodPipe(ageGateSchema)) body: { birthYear: number },
   ) {
     return this.profiles.setBirthYear(user.userId, body.birthYear);
+  }
+
+  /** Pick (or change) your look. Counts as the onboarding "avatar" step. */
+  @Put('profile/avatar')
+  setAvatar(
+    @CurrentUser() user: AuthContext,
+    @Body(new ZodPipe(setAvatarSchema)) body: SetAvatarRequest,
+  ) {
+    return this.profiles.setAvatar(user.userId, body.avatar);
   }
 
   /** The client reports a finished (or skipped) step: contacts, avatar or notifications. */

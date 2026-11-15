@@ -1,15 +1,16 @@
 import type pg from 'pg';
-import type {
-  ConversationFilter,
-  ConversationState,
-  ConversationSummary,
-  ConversationsResponse,
-  Message,
-  MessagesResponse,
-  MoneyRequestPayload,
-  MoneySentPayload,
-  RealtimeEvent,
-  Relationship,
+import {
+  parseAvatar,
+  type ConversationFilter,
+  type ConversationState,
+  type ConversationSummary,
+  type ConversationsResponse,
+  type Message,
+  type MessagesResponse,
+  type MoneyRequestPayload,
+  type MoneySentPayload,
+  type RealtimeEvent,
+  type Relationship,
 } from '@dyce/shared';
 import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
@@ -62,6 +63,7 @@ type SummaryRow = {
   peer_id: string;
   username: string;
   display_name: string;
+  avatar: unknown;
   relationship: Relationship;
   state: ConversationState | 'declined' | 'left';
   unread: number;
@@ -593,7 +595,7 @@ export class MessagesService {
     if (opts.onlyWithMessages) where += ` AND c.last_message_at IS NOT NULL`;
 
     const r = await db.query<SummaryRow>(
-      `SELECT c.id, u.id AS peer_id, p.username, p.display_name,
+      `SELECT c.id, u.id AS peer_id, p.username, p.display_name, p.avatar,
               ${RELATIONSHIP_EXPR} AS relationship,
               CASE WHEN f.status = 'accepted' AND m.state IN ('request', 'declined') THEN 'active'
                    ELSE m.state::text END AS state,
@@ -640,6 +642,7 @@ function toSummary(row: SummaryRow): ConversationSummary {
       id: row.peer_id,
       username: row.username,
       displayName: row.display_name,
+      avatar: parseAvatar(row.avatar),
       relationship: row.relationship,
     },
     state,

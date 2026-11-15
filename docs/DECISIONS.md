@@ -2,6 +2,16 @@
 
 One entry per decision, newest first. App-side decisions (ADR-001 stack, 002 avatar system, 003 domain, 006 hoisted node_modules for Metro) are in `Dyce/docs/DECISIONS.md`.
 
+## ADR-014 · Avatars, phase A: starter looks · 2026-11-15
+Context: AVATAR_GUIDEBOOK §8 phase A ships the 220 generated profiles as the player's look until the editable 3D rig exists (phase B). The backend is NestJS + PostgreSQL with no Supabase Storage, and nothing renders avatars server-side yet.
+Decision:
+- **Stored as `{ v: 1, preset: 'dyce_av_042' }` in `profiles.avatar`** (the column already existed as `'{}'`, meaning none). `@dyce/shared` has `avatarConfigSchema` (strict, preset must be 001-220), `parseAvatar` (anything invalid reads as "no avatar" so one bad row never breaks a list) and `setAvatarSchema`. The `v: 2` rig schema waits for the artist's part manifest (it needs real part ids and morph names) and is added in phase B, which migrates v1 presets to the matching v2 look.
+- **API:** `PUT /profile/avatar` saves the look, counts as the onboarding "avatar" step and can be repeated to change it. `GET /me` returns `profile.avatar`. Every person the app shows carries `avatar` (`PublicUser`, friends, friend requests, blocked people, money parties): the look is public to anyone who can see the person, like the name. No new migration.
+- **Images ship inside the app**, not from a CDN: `tools/avatar/make_starter_looks.py` cuts 256px WebP thumbnails (about 2 MB for all 220) and generates `starter-looks.ts` (skin tone, hair type, a spoken description) and the static `require` table Metro needs. The 1024px originals stay in `assets/avatar-profiles/` for marketing and the future renderer. Works offline and needs no image hosting; the cost is app size and that a new look needs a new release. Phase B's server-rendered, hash-named images (`<hash>@<size>.webp`) replace this behind the same `<UserAvatar>`.
+- **UI:** `<Avatar>` in `@dyce/ui` is presentational (a picture, or the person's initial); the app's `<UserAvatar avatar name size>` maps a saved look to its picture. The "Pick your look" screen (onboarding, or `/avatar` later from Edit profile) has a large preview, skin-tone and hair-type filters, the grid, a shuffle button, Save, and Skip in onboarding.
+- **Not built (deferred to phase B or later):** the render service skeleton and `tools/avatar/{export,build,viewer}` (they need the artist's rig; there is nothing to render yet), `expo-image` caching (not installed; plain `Image` is enough for bundled files and arrives with remote images), a 200-row list performance test on a device, and "Make from a selfie".
+Consequences: every list that shows a person shows their face. People who skip see their initial. Owner: avatar-engineer
+
 ## ADR-013 · Block and report · 2026-11-15
 Context: SPEC §11 needs blocking (they can't message, invite or see you online) and reporting (reasons plus optional evidence from chat). The data model had `blocks` and `reports` tables and every list, send and lookup already treated a blocked pair as strangers; nothing could create or remove a block or file a report.
 Decision:

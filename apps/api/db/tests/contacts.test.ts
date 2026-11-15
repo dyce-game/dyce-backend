@@ -70,6 +70,7 @@ describe('ContactsService.match', () => {
           id: a.id,
           username: a.username,
           displayName: expect.any(String),
+          avatar: null,
           relationship: 'none',
         },
       },
@@ -79,6 +80,7 @@ describe('ContactsService.match', () => {
           id: b.id,
           username: b.username,
           displayName: expect.any(String),
+          avatar: null,
           relationship: 'none',
         },
       },
@@ -93,6 +95,7 @@ describe('ContactsService.match', () => {
     expect(text).not.toContain(a.e164.slice(4));
     expect(text).not.toContain('8099990003');
     expect(Object.keys(res.matches[0]!.user).sort()).toEqual([
+      'avatar',
       'displayName',
       'id',
       'relationship',

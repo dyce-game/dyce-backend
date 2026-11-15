@@ -1,5 +1,10 @@
 import type pg from 'pg';
-import type { BlocksResponse, ReportRequest, ReportResult } from '@dyce/shared';
+import {
+  parseAvatar,
+  type BlocksResponse,
+  type ReportRequest,
+  type ReportResult,
+} from '@dyce/shared';
 import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
 import { lagosDayStart, readConfigInt } from '../db/config.ts';
@@ -61,9 +66,10 @@ export class SafetyService {
       id: string;
       username: string | null;
       display_name: string | null;
+      avatar: unknown;
       created_at: Date;
     }>(
-      `SELECT b.blocked_id AS id, p.username, p.display_name, b.created_at
+      `SELECT b.blocked_id AS id, p.username, p.display_name, p.avatar, b.created_at
          FROM blocks b LEFT JOIN profiles p ON p.id = b.blocked_id
         WHERE b.blocker_id = $1
         ORDER BY b.created_at DESC, b.blocked_id
@@ -76,6 +82,7 @@ export class SafetyService {
           id: row.id,
           username: row.username ?? 'deleted',
           displayName: row.display_name ?? '',
+          avatar: parseAvatar(row.avatar),
         },
         blockedAt: row.created_at.toISOString(),
       })),

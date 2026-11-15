@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AvatarConfig } from './avatar.ts';
 import type { PublicUser } from './contacts.ts';
 import { messageCursorSchema } from './messages.ts';
 
@@ -86,7 +87,12 @@ export type WeeklyActivity = {
   netKobo: number;
 };
 
-export type MoneyParty = { id: string; username: string; displayName: string };
+export type MoneyParty = {
+  id: string;
+  username: string;
+  displayName: string;
+  avatar: AvatarConfig | null;
+};
 
 export type TxnKind =
   | 'grant'

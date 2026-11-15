@@ -83,7 +83,13 @@ describe('list', () => {
     expect(names(list)).toEqual([zed.username, amy.username].sort());
     const zedEntry = list.find((f) => f.id === zed.id)!;
     expect(zedEntry.since).toBe(new Date('2026-11-14T10:30:00Z').toISOString()); // when zed accepted
-    expect(Object.keys(zedEntry).sort()).toEqual(['displayName', 'id', 'since', 'username']);
+    expect(Object.keys(zedEntry).sort()).toEqual([
+      'avatar',
+      'displayName',
+      'id',
+      'since',
+      'username',
+    ]);
   });
 
   it('shows the friendship from both sides', async () => {

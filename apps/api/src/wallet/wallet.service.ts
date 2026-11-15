@@ -1,6 +1,7 @@
 import type pg from 'pg';
 import {
   formatNaira,
+  parseAvatar,
   type CreatePaymentRequestInput,
   type HistoryItem,
   type HistoryQuery,
@@ -478,12 +479,24 @@ export class WalletService {
   private async parties(ids: string[]): Promise<Map<string, MoneyParty>> {
     const unique = [...new Set(ids)];
     if (unique.length === 0) return new Map();
-    const r = await this.pool.query<{ id: string; username: string; display_name: string }>(
-      `SELECT id, username, display_name FROM profiles WHERE id = ANY($1::uuid[])`,
-      [unique],
-    );
+    const r = await this.pool.query<{
+      id: string;
+      username: string;
+      display_name: string;
+      avatar: unknown;
+    }>(`SELECT id, username, display_name, avatar FROM profiles WHERE id = ANY($1::uuid[])`, [
+      unique,
+    ]);
     return new Map(
-      r.rows.map((p) => [p.id, { id: p.id, username: p.username, displayName: p.display_name }]),
+      r.rows.map((p) => [
+        p.id,
+        {
+          id: p.id,
+          username: p.username,
+          displayName: p.display_name,
+          avatar: parseAvatar(p.avatar),
+        },
+      ]),
     );
   }
 
@@ -511,10 +524,11 @@ export class WalletService {
       requester: string;
       username: string;
       display_name: string;
+      avatar: unknown;
       relationship: Relationship;
     }>(
       `SELECT pr.code, pr.status, pr.amount_kobo, pr.note, pr.created_at, pr.expires_at,
-              pr.target_user, pr.paid_by, u.id AS requester, p.username, p.display_name,
+              pr.target_user, pr.paid_by, u.id AS requester, p.username, p.display_name, p.avatar,
               ${RELATIONSHIP_EXPR} AS relationship
          FROM payment_requests pr
          JOIN users u ON u.id = pr.requester
@@ -541,6 +555,7 @@ export class WalletService {
           id: row.requester,
           username: row.username,
           displayName: row.display_name,
+          avatar: parseAvatar(row.avatar),
           relationship: mine ? 'none' : row.relationship,
         },
         mine,

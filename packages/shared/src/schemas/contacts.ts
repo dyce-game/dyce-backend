@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { normalizePhone } from '../phone.ts';
+import type { AvatarConfig } from './avatar.ts';
 
 /** Contacts are matched in batches of at most this many numbers (docs: batch in chunks of 500). */
 export const CONTACT_BATCH_SIZE = 500;
@@ -22,6 +23,8 @@ export type PublicUser = {
   id: string;
   username: string;
   displayName: string;
+  /** Their starter look, or null until they pick one (show their initial). */
+  avatar: AvatarConfig | null;
   relationship: Relationship;
 };
 

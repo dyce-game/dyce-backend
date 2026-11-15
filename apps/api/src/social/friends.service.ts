@@ -1,9 +1,10 @@
 import type pg from 'pg';
-import type {
-  FriendRequestsResponse,
-  FriendsResponse,
-  PublicUser,
-  Relationship,
+import {
+  parseAvatar,
+  type FriendRequestsResponse,
+  type FriendsResponse,
+  type PublicUser,
+  type Relationship,
 } from '@dyce/shared';
 import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
@@ -38,7 +39,7 @@ export class FriendsService {
   /** Exact, case-insensitive username lookup. Blocked users (either direction) look like they don't exist. */
   async findByUsername(userId: string, username: string): Promise<PublicUser> {
     const r = await this.pool.query<PublicUserRow>(
-      `SELECT u.id, p.username, p.display_name, ${RELATIONSHIP_EXPR} AS relationship
+      `SELECT u.id, p.username, p.display_name, p.avatar, ${RELATIONSHIP_EXPR} AS relationship
          FROM users u
          JOIN profiles p ON p.id = u.id
          ${FRIENDSHIP_JOIN}
@@ -58,9 +59,10 @@ export class FriendsService {
       id: string;
       username: string;
       display_name: string;
+      avatar: unknown;
       since: Date;
     }>(
-      `SELECT u.id, p.username, p.display_name, coalesce(f.responded_at, f.created_at) AS since
+      `SELECT u.id, p.username, p.display_name, p.avatar, coalesce(f.responded_at, f.created_at) AS since
          FROM friendships f
          JOIN users u ON u.id = CASE WHEN f.user_low = $1::uuid THEN f.user_high ELSE f.user_low END
          JOIN profiles p ON p.id = u.id
@@ -77,6 +79,7 @@ export class FriendsService {
         id: row.id,
         username: row.username,
         displayName: row.display_name,
+        avatar: parseAvatar(row.avatar),
         since: row.since.toISOString(),
       })),
     };
@@ -91,10 +94,11 @@ export class FriendsService {
       id: string;
       username: string;
       display_name: string;
+      avatar: unknown;
       requested_at: Date;
       mutual: number;
     }>(
-      `SELECT u.id, p.username, p.display_name, f.created_at AS requested_at,
+      `SELECT u.id, p.username, p.display_name, p.avatar, f.created_at AS requested_at,
               (SELECT count(*)::int FROM (
                  SELECT CASE WHEN a.user_low = $1::uuid THEN a.user_high ELSE a.user_low END
                    FROM friendships a WHERE a.status = 'accepted' AND $1::uuid IN (a.user_low, a.user_high)
@@ -119,9 +123,10 @@ export class FriendsService {
       id: string;
       username: string;
       display_name: string;
+      avatar: unknown;
       requested_at: Date;
     }>(
-      `SELECT u.id, p.username, p.display_name, f.created_at AS requested_at
+      `SELECT u.id, p.username, p.display_name, p.avatar, f.created_at AS requested_at
          FROM friendships f
          JOIN users u ON u.id = CASE WHEN f.user_low = $1::uuid THEN f.user_high ELSE f.user_low END
          JOIN profiles p ON p.id = u.id
@@ -140,6 +145,7 @@ export class FriendsService {
           id: r.id,
           username: r.username,
           displayName: r.display_name,
+          avatar: parseAvatar(r.avatar),
           relationship: 'pending_in' as const,
         },
         requestedAt: r.requested_at.toISOString(),
@@ -150,6 +156,7 @@ export class FriendsService {
           id: r.id,
           username: r.username,
           displayName: r.display_name,
+          avatar: parseAvatar(r.avatar),
           relationship: 'pending_out' as const,
         },
         requestedAt: r.requested_at.toISOString(),

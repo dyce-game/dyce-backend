@@ -3,6 +3,8 @@ import type pg from 'pg';
 import {
   isAdultByBirthYear,
   nextOnboardingStep,
+  parseAvatar,
+  type AvatarConfig,
   type ClientStep,
   type NextStep,
   type OnboardingState,
@@ -20,6 +22,8 @@ export type Me = {
     isAdult: boolean;
     level: number;
     xp: number;
+    /** Their starter look, or null until they pick one. */
+    avatar: AvatarConfig | null;
   } | null;
   onboarding: OnboardingState;
   nextStep: NextStep;
@@ -48,7 +52,10 @@ export class ProfileService {
       is_adult: boolean;
       level: number;
       xp: number;
-    }>('SELECT username, display_name, is_adult, level, xp FROM profiles WHERE id = $1', [userId]);
+      avatar: unknown;
+    }>('SELECT username, display_name, is_adult, level, xp, avatar FROM profiles WHERE id = $1', [
+      userId,
+    ]);
     const row = p.rows[0];
     const onboarding = await loadOnboardingState(this.pool, userId);
     return {
@@ -60,6 +67,7 @@ export class ProfileService {
             isAdult: row.is_adult,
             level: row.level,
             xp: row.xp,
+            avatar: parseAvatar(row.avatar),
           }
         : null,
       onboarding,
@@ -129,6 +137,24 @@ export class ProfileService {
       throw new AuthError(exists.rowCount === 0 ? 'profile_required' : 'age_already_set');
     }
     return { isAdult: r.rows[0]!.is_adult };
+  }
+
+  /**
+   * Saves the player's look (a starter look today) and counts the onboarding "avatar" step as done. Choosing
+   * again later just replaces it.
+   */
+  async setAvatar(
+    userId: string,
+    avatar: AvatarConfig,
+  ): Promise<{ avatar: AvatarConfig; nextStep: NextStep }> {
+    const r = await this.pool.query(
+      `UPDATE profiles
+          SET avatar = $2::jsonb, onboarding = onboarding || jsonb_build_object('avatar', true)
+        WHERE id = $1`,
+      [userId, JSON.stringify(avatar)],
+    );
+    if (r.rowCount === 0) throw new AuthError('profile_required');
+    return { avatar, nextStep: nextOnboardingStep(await loadOnboardingState(this.pool, userId)) };
   }
 
   /** Records a client-side step (contacts, avatar, notifications) as done or skipped. */

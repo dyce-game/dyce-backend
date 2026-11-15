@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import type { AvatarConfig } from './avatar.ts';
 import type { PublicUser } from './contacts.ts';
 
 /** Path parameter naming another user. */
@@ -8,6 +9,7 @@ export type FriendEntry = {
   id: string;
   username: string;
   displayName: string;
+  avatar: AvatarConfig | null;
   /** ISO timestamp the friendship started. */
   since: string;
 };

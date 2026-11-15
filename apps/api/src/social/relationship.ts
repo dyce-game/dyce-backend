@@ -1,5 +1,5 @@
 import type pg from 'pg';
-import type { PublicUser, Relationship } from '@dyce/shared';
+import { parseAvatar, type PublicUser, type Relationship } from '@dyce/shared';
 
 /** One writer at a time per pair of people, so racing requests/messages between them can't both insert. */
 export async function lockPair(c: pg.PoolClient, a: string, b: string): Promise<void> {
@@ -37,6 +37,7 @@ export type PublicUserRow = {
   id: string;
   username: string;
   display_name: string;
+  avatar: unknown;
   relationship: Relationship;
 };
 
@@ -45,6 +46,7 @@ export function toPublicUser(row: PublicUserRow): PublicUser {
     id: row.id,
     username: row.username,
     displayName: row.display_name,
+    avatar: parseAvatar(row.avatar),
     relationship: row.relationship,
   };
 }

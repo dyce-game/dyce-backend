@@ -57,7 +57,7 @@ export class ContactsService {
       }
 
       const found = await c.query<MatchRow>(
-        `SELECT u.phone_hash, u.id, p.username, p.display_name, ${RELATIONSHIP_EXPR} AS relationship
+        `SELECT u.phone_hash, u.id, p.username, p.display_name, p.avatar, ${RELATIONSHIP_EXPR} AS relationship
            FROM users u
            JOIN profiles p ON p.id = u.id
            ${FRIENDSHIP_JOIN}
@@ -91,7 +91,7 @@ export class ContactsService {
   /** People from earlier syncs who are on Dyce and not yet your friend ("On Dyce" suggestions). */
   async suggestions(userId: string): Promise<ContactSuggestionsResponse> {
     const r = await this.pool.query<PublicUserRow>(
-      `SELECT u.id, p.username, p.display_name, ${RELATIONSHIP_EXPR} AS relationship
+      `SELECT u.id, p.username, p.display_name, p.avatar, ${RELATIONSHIP_EXPR} AS relationship
          FROM contact_links cl
          JOIN users u ON u.id = cl.contact_user_id
          JOIN profiles p ON p.id = u.id
