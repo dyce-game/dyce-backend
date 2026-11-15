@@ -1,0 +1,10 @@
+node_modules
+dist
+coverage
+pnpm-lock.yaml
+apps/api/db/migrations
+# Project rules, agent briefs and docs are authored prose: not auto-formatted.
+docs
+.claude
+CLAUDE.md
+README.md

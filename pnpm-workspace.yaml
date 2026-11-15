@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+  - packages/*
+
+# Kept from the monorepo this was split from: the flat layout is known to work with the test runners and
+# embedded Postgres here. (The app needed it for Metro; the backend does not, and may drop it later.)
+nodeLinker: hoisted
+strictPeerDependencies: false
+# Don't silently run `pnpm install` before every script (it can hang on a flaky network).
+verifyDepsBeforeRun: false
+
+allowBuilds:
+  '@embedded-postgres/windows-x64': false
+  '@swc/core': true
