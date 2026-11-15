@@ -49,7 +49,8 @@ export const requestCodeSchema = z
   .transform((s) => s.toUpperCase())
   .pipe(z.string().regex(/^[A-Z2-7]{10}$/, 'invalid code'));
 
-export const HISTORY_FILTERS = ['all', 'sent', 'received', 'requests', 'topups', 'games'] as const;
+/** The History chips: Pools (stakes and winnings), Transfers (sends and request payments), Bonuses & refunds. */
+export const HISTORY_FILTERS = ['all', 'pool', 'transfer', 'bonus'] as const;
 export type HistoryFilter = (typeof HISTORY_FILTERS)[number];
 
 export const historyQuerySchema = z.object({
@@ -65,6 +66,24 @@ export type WalletSummary = {
   topup: { available: boolean; amountKobo: number; thresholdKobo: number };
   limits: { perSendKobo: number; dailyKobo: number; sentTodayKobo: number };
   openRequests: number;
+  /** The three small cards on the Wallet tab. Zero until games are played. */
+  stats: {
+    /** Pool winnings paid out in the last 7 days. */
+    wonThisWeekKobo: number;
+    /** Wins as a share of finished games (0-100), or null before the first game. */
+    winRatePct: number | null;
+    /** Wins in a row, counting back from the latest finished game. */
+    winStreak: number;
+  };
+  /** Stakes held in Pools that haven't finished yet. */
+  locked: { kobo: number; pools: number };
+};
+
+/** The last 7 Lagos days, oldest first: what moved each day, and any free top-up. */
+export type WeeklyActivity = {
+  days: { date: string; netKobo: number; topupKobo: number }[];
+  /** Sum of the seven days' net. */
+  netKobo: number;
 };
 
 export type MoneyParty = { id: string; username: string; displayName: string };

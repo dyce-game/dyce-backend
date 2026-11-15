@@ -64,6 +64,12 @@ export class WalletController {
     return this.wallet.history(user.userId, query);
   }
 
+  /** The last 7 days of net movement (History bars, Top-up week grid). */
+  @Get('weekly')
+  weekly(@CurrentUser() user: AuthContext) {
+    return this.wallet.weekly(user.userId);
+  }
+
   @Get('transactions/:id')
   receipt(@CurrentUser() user: AuthContext, @Param('id', txnIdPipe) id: string) {
     return this.wallet.receipt(user.userId, id);

@@ -15,6 +15,7 @@ import {
   type SendMoneyRequest,
   type TxnKind,
   type WalletSummary,
+  type WeeklyActivity,
 } from '@dyce/shared';
 import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
@@ -32,11 +33,9 @@ const CHAT_TTL_MINUTES = 7 * 24 * 60;
 
 const FILTER_SQL: Record<HistoryQuery['filter'], string> = {
   all: 'TRUE',
-  sent: `t.kind IN ('transfer', 'request_payment') AND e.amount_kobo < 0`,
-  received: `t.kind IN ('transfer', 'request_payment') AND e.amount_kobo > 0`,
-  requests: `t.kind = 'request_payment'`,
-  topups: `t.kind IN ('topup', 'grant')`,
-  games: `t.kind IN ('stake', 'payout', 'refund')`,
+  pool: `t.kind IN ('stake', 'payout')`,
+  transfer: `t.kind IN ('transfer', 'request_payment')`,
+  bonus: `t.kind IN ('grant', 'topup', 'refund', 'reversal', 'adjust')`,
 };
 
 const SYSTEM_LABELS: Partial<Record<TxnKind, string>> = {
@@ -48,6 +47,8 @@ const SYSTEM_LABELS: Partial<Record<TxnKind, string>> = {
   reversal: 'Reversal',
   adjust: 'Adjustment',
 };
+
+type SummaryExtras = Pick<WalletSummary, 'stats' | 'locked'>;
 
 type Meta = {
   from_user?: string;
@@ -120,7 +121,80 @@ export class WalletService {
         sentTodayKobo: Number(used.rows[0]?.sent ?? 0),
       },
       openRequests: Number(open.rows[0]?.n ?? 0),
+      ...(await this.extras(userId, now)),
     };
+  }
+
+  /** Win stats and stakes held in unfinished Pools. All zero until games are played. */
+  private async extras(userId: string, now: Date): Promise<SummaryExtras> {
+    const weekAgo = new Date(now.getTime() - 7 * 86_400_000);
+    const [won, results, locked] = await Promise.all([
+      this.pool.query<{ total: string }>(
+        `SELECT coalesce(sum(e.amount_kobo), 0) AS total
+           FROM ledger_entries e
+           JOIN ledger_txns t ON t.id = e.txn_id
+           JOIN wallets w ON w.account_id = e.account_id AND w.user_id = $1
+          WHERE t.kind = 'payout' AND t.created_at >= $2`,
+        [userId, weekAgo],
+      ),
+      this.pool.query<{ result: string }>(
+        `SELECT mp.result::text AS result
+           FROM match_players mp JOIN matches m ON m.id = mp.match_id
+          WHERE mp.user_id = $1 AND m.status = 'finished' AND mp.result IS NOT NULL
+          ORDER BY m.finished_at DESC NULLS LAST, m.created_at DESC
+          LIMIT 200`,
+        [userId],
+      ),
+      this.pool.query<{ kobo: string; pools: string }>(
+        `SELECT coalesce(sum(mp.staked_kobo), 0) AS kobo, count(*) AS pools
+           FROM match_players mp JOIN matches m ON m.id = mp.match_id
+          WHERE mp.user_id = $1 AND m.mode = 'pool' AND mp.staked_kobo > 0
+            AND m.status IN ('invited', 'countered', 'active')`,
+        [userId],
+      ),
+    ]);
+    const list = results.rows.map((r) => r.result);
+    const wins = list.filter((r) => r === 'win').length;
+    let streak = 0;
+    for (const r of list) {
+      if (r !== 'win') break;
+      streak++;
+    }
+    return {
+      stats: {
+        wonThisWeekKobo: Math.max(0, Number(won.rows[0]?.total ?? 0)),
+        winRatePct: list.length === 0 ? null : Math.round((wins / list.length) * 100),
+        winStreak: streak,
+      },
+      locked: {
+        kobo: Number(locked.rows[0]?.kobo ?? 0),
+        pools: Number(locked.rows[0]?.pools ?? 0),
+      },
+    };
+  }
+
+  /** What moved each of the last 7 Lagos days (the bars on History and the week grid on Top-up). */
+  async weekly(userId: string): Promise<WeeklyActivity> {
+    const now = this.clock();
+    const r = await this.pool.query<{ day: string; net: string; topup: string }>(
+      `SELECT to_char(t.created_at AT TIME ZONE 'Africa/Lagos', 'YYYY-MM-DD') AS day,
+              sum(e.amount_kobo) AS net,
+              coalesce(sum(e.amount_kobo) FILTER (WHERE t.kind = 'topup'), 0) AS topup
+         FROM ledger_entries e
+         JOIN ledger_txns t ON t.id = e.txn_id
+         JOIN wallets w ON w.account_id = e.account_id AND w.user_id = $1
+        WHERE (t.created_at AT TIME ZONE 'Africa/Lagos')::date >= $2::date
+          AND t.kind <> 'grant'
+        GROUP BY 1`,
+      [userId, lagosDate(new Date(now.getTime() - 6 * 86_400_000))],
+    );
+    const byDay = new Map(r.rows.map((row) => [row.day, row]));
+    const days = Array.from({ length: 7 }, (_, i) => {
+      const date = lagosDate(new Date(now.getTime() - (6 - i) * 86_400_000));
+      const row = byDay.get(date);
+      return { date, netKobo: Number(row?.net ?? 0), topupKobo: Number(row?.topup ?? 0) };
+    });
+    return { days, netKobo: days.reduce((n, d) => n + d.netKobo, 0) };
   }
 
   /** The free daily top-up (balance under the threshold, once per Lagos day). */

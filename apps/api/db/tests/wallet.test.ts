@@ -4,6 +4,7 @@ import { MessagesService, type Publisher } from '../../src/chat/messages.service
 import { LedgerRepo } from '../../src/ledger/ledger.repo.ts';
 import { WalletService } from '../../src/wallet/wallet.service.ts';
 import {
+  createMatch,
   createTestDb,
   balanceOf,
   setBalance,
@@ -513,7 +514,7 @@ describe('history and receipts', () => {
     expect(h.nextCursor).toBeNull();
   });
 
-  it('filters sent, received, requests, top-ups and games', async () => {
+  it('filters Pools, Transfers and Bonuses & refunds', async () => {
     const a = await person();
     const b = await person();
     await befriend(a, b);
@@ -527,22 +528,22 @@ describe('history and receipts', () => {
     await wallet.payRequest(b.id, view.code, { idempotencyKey: key() });
     await setBalance(db, a.id, 100 * NAIRA);
     await wallet.claimTopup(a.id);
-    const kinds = async (filter: 'sent' | 'received' | 'requests' | 'topups' | 'games') =>
+    const kinds = async (filter: 'pool' | 'transfer' | 'bonus') =>
       (await wallet.history(a.id, { filter, limit: 20 })).items.map((i) => [
         i.kind,
         Math.sign(i.amountKobo),
       ]);
-    expect(await kinds('sent')).toEqual([['transfer', -1]]);
-    expect(await kinds('received')).toEqual([
+    expect(await kinds('transfer')).toEqual([
       ['request_payment', 1],
       ['transfer', 1],
+      ['transfer', -1],
     ]);
-    expect(await kinds('requests')).toEqual([['request_payment', 1]]);
-    expect(await kinds('topups')).toEqual([
+    expect(await kinds('bonus')).toEqual([
       ['topup', 1],
+      ['adjust', -1], // the test's own setBalance
       ['grant', 1],
     ]);
-    expect(await kinds('games')).toEqual([]);
+    expect(await kinds('pool')).toEqual([]);
   });
 
   it('pages through a long history without gaps or repeats', async () => {
@@ -553,7 +554,7 @@ describe('history and receipts', () => {
     const seen: string[] = [];
     let before: string | undefined;
     for (let guard = 0; guard < 10; guard++) {
-      const page = await wallet.history(a.id, { filter: 'sent', limit: 3, before });
+      const page = await wallet.history(a.id, { filter: 'transfer', limit: 3, before });
       seen.push(...page.items.map((i) => i.note));
       if (!page.nextCursor) break;
       before = page.nextCursor;
@@ -597,12 +598,80 @@ describe('history and receipts', () => {
 
   it('labels the welcome gift and top-ups instead of naming a person', async () => {
     const a = await person();
-    const grant = (await wallet.history(a.id, { filter: 'topups', limit: 5 })).items[0]!;
+    const grant = (await wallet.history(a.id, { filter: 'bonus', limit: 5 })).items[0]!;
     expect(await wallet.receipt(a.id, grant.id)).toMatchObject({
       kind: 'grant',
       systemLabel: 'Dyce welcome gift',
       direction: 'in',
     });
+  });
+});
+
+describe('wallet stats, locked pools and the week', () => {
+  it('starts with zeros and no win rate', async () => {
+    const u = await person();
+    const s = await wallet.summary(u.id);
+    expect(s.stats).toEqual({ wonThisWeekKobo: 0, winRatePct: null, winStreak: 0 });
+    expect(s.locked).toEqual({ kobo: 0, pools: 0 });
+  });
+
+  it('counts stakes held in unfinished pools, not finished ones', async () => {
+    const a = await person();
+    const b = await person();
+    const open = await createMatch(db, a.id, [a.id, b.id], { mode: 'pool', stake: 1_500 * NAIRA });
+    await db.app.query('SELECT * FROM stake_pool($1, $2, $3, $4)', [
+      open,
+      a.id,
+      1_500 * NAIRA,
+      key(),
+    ]);
+    expect((await wallet.summary(a.id)).locked).toEqual({ kobo: 1_500 * NAIRA, pools: 1 });
+    expect((await wallet.summary(b.id)).locked).toEqual({ kobo: 0, pools: 0 });
+    await db.admin.query(
+      `UPDATE matches SET status = 'finished', finished_at = now() WHERE id = $1`,
+      [open],
+    );
+    expect((await wallet.summary(a.id)).locked).toEqual({ kobo: 0, pools: 0 });
+  });
+
+  it('works out win rate and the current streak from finished games', async () => {
+    const a = await person();
+    const b = await person();
+    // oldest to newest: loss, win, win, draw, win, win
+    const results = ['loss', 'win', 'win', 'draw', 'win', 'win'];
+    for (const [i, result] of results.entries()) {
+      const m = await createMatch(db, a.id, [a.id, b.id]);
+      await db.admin.query(
+        `UPDATE matches SET status = 'finished', finished_at = $2 WHERE id = $1`,
+        [m, new Date(Date.now() - (results.length - i) * 60_000)],
+      );
+      await db.admin.query(
+        `UPDATE match_players SET result = $3::match_result WHERE match_id = $1 AND user_id = $2`,
+        [m, a.id, result],
+      );
+    }
+    const s = await wallet.summary(a.id);
+    expect(s.stats.winRatePct).toBe(67); // 4 of 6
+    expect(s.stats.winStreak).toBe(2);
+  });
+
+  it("shows the last seven days: today's net and any top-up, oldest first", async () => {
+    const a = await person();
+    const b = await person();
+    await befriend(a, b);
+    await send(a, b, 1_000);
+    await setBalance(db, a.id, 100 * NAIRA);
+    await wallet.claimTopup(a.id);
+    const week = await wallet.weekly(a.id);
+    expect(week.days).toHaveLength(7);
+    const dates = week.days.map((d) => d.date);
+    expect([...dates].sort()).toEqual(dates);
+    const today = week.days[6]!;
+    expect(today.topupKobo).toBe(20_000 * NAIRA);
+    expect(week.days.slice(0, 6).every((d) => d.netKobo === 0 && d.topupKobo === 0)).toBe(true);
+    expect(week.netKobo).toBe(today.netKobo);
+    // the welcome gift is not "this week's net"; the send (-1,000), the adjustment and the top-up are
+    expect(today.netKobo).toBe(-1_000 * NAIRA + (100 * NAIRA - 199_000 * NAIRA) + 20_000 * NAIRA);
   });
 });
 
