@@ -5,6 +5,7 @@ import {
   type ConversationState,
   type ConversationSummary,
   type ConversationsResponse,
+  type GameCardPayload,
   type Message,
   type MessagesResponse,
   type MoneyRequestPayload,
@@ -53,6 +54,8 @@ const toMessage = (r: MessageRow): Message => {
       return { ...base, kind: 'money_sent', payload: r.payload as MoneySentPayload };
     case 'money_request':
       return { ...base, kind: 'money_request', payload: r.payload as MoneyRequestPayload };
+    case 'game':
+      return { ...base, kind: 'game', payload: r.payload as GameCardPayload };
     default:
       return { ...base, kind: 'text' };
   }
@@ -286,7 +289,8 @@ export class MessagesService {
     senderId: string,
     input:
       | { id: string; kind: 'money_sent'; body: string; payload: MoneySentPayload }
-      | { id: string; kind: 'money_request'; body: string; payload: MoneyRequestPayload },
+      | { id: string; kind: 'money_request'; body: string; payload: MoneyRequestPayload }
+      | { id: string; kind: 'game'; body: string; payload: GameCardPayload },
   ): Promise<Message> {
     const now = this.clock();
     const result = await withTx(this.pool, async (c) => {
@@ -351,6 +355,39 @@ export class MessagesService {
     if (row) {
       this.safePublish([row.peer_a, row.peer_b], { type: 'message', message: toMessage(row) });
     }
+  }
+
+  /**
+   * Updates a game card (invited -> active -> finished) and tells both people. Only moves forward: a late
+   * update with an older `stateVersion` is ignored, so two quick moves can't leave the card behind.
+   */
+  async updateGameCard(matchId: string, payload: GameCardPayload): Promise<void> {
+    const r = await this.pool.query<MessageRow & { peer_a: string; peer_b: string }>(
+      `UPDATE messages SET payload = $2::jsonb, edited_at = $3
+        WHERE id = $1 AND kind = 'game' AND coalesce((payload->>'stateVersion')::int, 0) <= $4
+        RETURNING id, conversation_id, sender_id, kind, body, payload, created_at,
+                  sender_id AS peer_a,
+                  (SELECT user_id FROM conversation_members
+                    WHERE conversation_id = messages.conversation_id AND user_id <> messages.sender_id) AS peer_b`,
+      [matchId, JSON.stringify(payload), this.clock(), payload.stateVersion],
+    );
+    const row = r.rows[0];
+    if (row) {
+      this.safePublish([row.peer_a, row.peer_b], { type: 'message', message: toMessage(row) });
+    }
+  }
+
+  /**
+   * The other person in a conversation `userId` is in, if you can interact with them (not blocked either
+   * way), and whether you're friends. Games are only played between friends.
+   */
+  async playablePeer(
+    userId: string,
+    conversationId: string,
+  ): Promise<{ peerId: string; friends: boolean }> {
+    const seat = await this.seat(this.pool, userId, conversationId);
+    await this.assertReachable(this.pool, userId, seat.peerId);
+    return { peerId: seat.peerId, friends: seat.friends };
   }
 
   /** Marks everything up to now as read. Only an accepted conversation tells the sender. */

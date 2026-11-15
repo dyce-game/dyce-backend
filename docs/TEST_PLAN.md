@@ -25,6 +25,7 @@ Owner: qa-engineer. Server-side layers for `dyce-backend`; the app side is in `.
 | SMS providers, env validation, tokens, hashing | Jest | `apps/api/src/**/*.test.ts` | `pnpm test` |
 | Money utils, config, phone/username/onboarding rules | Jest | `packages/shared/src/*.test.ts` | `pnpm test` |
 | Engine contract + rules + RNG | Jest + fast-check | `packages/games/src/**` | `pnpm test` |
+| Whot!, Word Hunt, Cup Pong engines: contract harness (random legal play terminates, replay hash, JSON round trip, views), rules, ends and results, views hide secrets, wire schemas | Jest + fast-check | `packages/games/src/{whot,wordhunt,cuppong}/engine.test.ts` | `pnpm test` |
 | Determinism (Node) | script | `packages/games/scripts/determinism.ts` | `pnpm test:determinism` |
 | API units | Jest | `apps/api/src/**/*.test.ts` | `pnpm test` |
 | API boots | script | `apps/api/scripts/smoke.mjs` | `pnpm -F @dyce/api smoke` |
@@ -49,6 +50,24 @@ Owner: qa-engineer. Server-side layers for `dyce-backend`; the app side is in `.
 | Nightly invariant check finds a planted mismatch | `database-level safety › the invariant check finds a planted mismatch` |
 | App role cannot write money tables or call admin functions | `database-level safety › the app role cannot…` |
 | Ledger is append-only; unbalanced commit rejected; balance never negative | `database-level safety › …` |
+
+## 3b. Engine rules and what proves them (ADR-017)
+| Rule | Test |
+|---|---|
+| Whot: 54-card deck, deal 6/5, ordinary starter, card conservation through any play | `whot deck and deal`, `whot properties` |
+| Whot: match by shape/number, Whot names a shape, request survives a draw | `whot basic plays`, `whot special cards` |
+| Whot: Hold On, Pick Two/Three stacking and defence, Suspension (2p), General Market | `whot special cards` |
+| Whot: last card and check up penalties, win, placements by hand points | `whot last card, check up and winning` |
+| Whot: market reshuffle, partial pick, blocked end | `whot empty market` |
+| Whot: hands, market order and RNG hidden; hands revealed only at the end | `whot views hide secrets` |
+| Word Hunt: board deterministic per seed, enough words, vowels sane | `word hunt board generator` |
+| Word Hunt: path rules (adjacent, no reuse), dictionary only, duplicates once, scoring | `word hunt word finding`, `word hunt rules` |
+| Word Hunt: start before submit, once each; grid hidden until start; words private until you finish | `word hunt rules`, `word hunt views hide what they must` |
+| Cup Pong: physics is a pure function; hit, short, long, wide, bounce shot, rim; pinned outcomes | `cup pong physics` |
+| Cup Pong: turn order, rounds, wobble from seed, equal turns, both-clear tie-break, max rounds, draw | `cup pong turns`, `cup pong endings` |
+| Cup Pong: re-rack once, 2–6 cups, before the first ball, own rack only | `cup pong re-rack` |
+| Cup Pong: state is integers only; RNG hidden; wire schema | `cup pong view and wire schema` |
+| All three: identical hash in the cross-runtime scenario | `pnpm test:determinism` (Node; Deno and Hermes not yet run) |
 
 ## 4. App-side tests
 Screens, the app's use of the contracts, Maestro flows and the device matrix are in `../Dyce/docs/TEST_PLAN.md`.

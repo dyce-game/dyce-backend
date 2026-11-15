@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { PublicUser } from './contacts.ts';
+import type { GameCardPayload, MatchView } from './games.ts';
 
 /** Longest text message, in characters. */
 export const MAX_MESSAGE_LENGTH = 4000;
@@ -60,7 +61,8 @@ type MessageBase = {
 export type Message =
   | (MessageBase & { kind: 'text'; payload?: undefined })
   | (MessageBase & { kind: 'money_sent'; payload: MoneySentPayload })
-  | (MessageBase & { kind: 'money_request'; payload: MoneyRequestPayload });
+  | (MessageBase & { kind: 'money_request'; payload: MoneyRequestPayload })
+  | (MessageBase & { kind: 'game'; payload: GameCardPayload });
 
 export type MessageKind = Message['kind'];
 
@@ -101,7 +103,9 @@ export type RealtimeEvent =
   | { type: 'ready' }
   | { type: 'message'; message: Message }
   | { type: 'read'; conversationId: string; userId: string; at: string }
-  | { type: 'typing'; conversationId: string; userId: string; typing: boolean };
+  | { type: 'typing'; conversationId: string; userId: string; typing: boolean }
+  /** A match you're in changed (accepted, moved, finished). Each player gets their own view of it. */
+  | { type: 'match'; match: MatchView };
 
 /** Client to server. The first frame must be `auth`. */
 export type RealtimeClientFrame =

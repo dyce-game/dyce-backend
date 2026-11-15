@@ -88,6 +88,8 @@ Rules: pure TS, no `Date.now()`/`Math.random()` (use `rng.ts`, seeded xoshiro128
 ## 5. Two ways a match runs
 **Async (iMessage-style, turn-based, 1v1, most games).** The game lives in a chat as a card. A move = call Edge Function `submit-move { matchId, expectedVersion, action }` → loads match, checks the caller is a current player, `validate` → `apply` → writes `match_moves` + new `state` + `state_version+1` inside a transaction (optimistic concurrency on version) → if terminal, calls `settle_match()` (SQL) → posts a system message to the conversation → push to the next player. Clients subscribe to the match row via Realtime for live updates when both are online.
 
+*Implemented (ADR-016):* NestJS `MatchesService` (`apps/api/src/matches`): `GET /games`, `POST /matches`, `GET /matches/:id`, `POST /matches/:id/accept|decline|cancel|moves`. The "Edge Function" is the `moves` route; each player gets their own `MatchView` (engine `view()`) in responses and in the `match` realtime event, and the chat card (message kind `game`, id = match id) is rewritten as the match moves.
+
 **Live (Colyseus).** Spaces and real-time games (Doodle Guess, Werewolf, Imposter, Charades, Crazy Cards, Whot, Ludo with 3–4 players). The room is created by Edge Function `start-space` which creates the `matches` row and asks game-server to create a room (signed server-to-server call). Clients join with their Supabase JWT; the room verifies it. The room holds state in memory, uses the same engine, broadcasts `view()` per client, persists moves in batches, and on end calls `settle_match()` with the service role. Reconnection window 60s; after that the seat forfeits (Pool) or is replaced by a bot (Free, optional).
 
 ## 6. Physics games and fairness

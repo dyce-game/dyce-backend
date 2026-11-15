@@ -33,7 +33,19 @@ export type AuthErrorCode =
   | 'recipient_not_reachable'
   | 'transaction_not_found'
   // safety
-  | 'reports_rate_limited';
+  | 'reports_rate_limited'
+  // games
+  | 'game_not_found'
+  | 'match_not_found'
+  | 'match_requires_friends'
+  | 'pool_not_available'
+  | 'match_not_open'
+  | 'cannot_accept_own_invite'
+  | 'open_invites_limit'
+  | 'not_your_turn'
+  | 'stale_version'
+  | 'invalid_action'
+  | 'illegal_move';
 
 const STATUS: Record<AuthErrorCode, number> = {
   validation_failed: 422,
@@ -67,6 +79,17 @@ const STATUS: Record<AuthErrorCode, number> = {
   recipient_not_reachable: 403,
   transaction_not_found: 404,
   reports_rate_limited: 429,
+  game_not_found: 404,
+  match_not_found: 404,
+  match_requires_friends: 403,
+  pool_not_available: 422,
+  match_not_open: 409,
+  cannot_accept_own_invite: 403,
+  open_invites_limit: 429,
+  not_your_turn: 409,
+  stale_version: 409,
+  invalid_action: 422,
+  illegal_move: 422,
 };
 
 /** An expected, user-facing failure. Mapped to `{ code, message, ...details }` by the HTTP filter. */
