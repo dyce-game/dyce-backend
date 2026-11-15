@@ -278,3 +278,35 @@ describe('age gate (ADR-007)', () => {
     ).resolves.toBeTruthy();
   });
 });
+
+describe('updateProfile', () => {
+  it('changes the display name and leaves the username alone', async () => {
+    const id = await bareUser();
+    const username = name();
+    await profiles.createProfile(id, { username, displayName: 'Old' });
+    const me = await profiles.updateProfile(id, { displayName: 'New Name' });
+    expect(me.profile).toMatchObject({
+      username,
+      displayName: 'New Name',
+      requestPolicy: 'everyone',
+    });
+  });
+
+  it('sets who can send requests, and keeps the name when only the policy changes', async () => {
+    const id = await bareUser();
+    await profiles.createProfile(id, { username: name(), displayName: 'Keep' });
+    const me = await profiles.updateProfile(id, { requestPolicy: 'nobody' });
+    expect(me.profile).toMatchObject({ displayName: 'Keep', requestPolicy: 'nobody' });
+    expect((await profiles.getMe(id)).profile?.requestPolicy).toBe('nobody');
+    expect(
+      (await profiles.updateProfile(id, { requestPolicy: 'fof' })).profile?.requestPolicy,
+    ).toBe('fof');
+  });
+
+  it('refuses a person without a profile', async () => {
+    const id = await bareUser();
+    await expect(profiles.updateProfile(id, { displayName: 'X' })).rejects.toEqual(
+      code('profile_required'),
+    );
+  });
+});

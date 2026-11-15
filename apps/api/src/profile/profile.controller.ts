@@ -5,6 +5,7 @@ import {
   HttpCode,
   Inject,
   Param,
+  Patch,
   Post,
   Put,
   Query,
@@ -15,10 +16,12 @@ import {
   ageGateSchema,
   clientStepSchema,
   profileCreateSchema,
+  profileUpdateSchema,
   setAvatarSchema,
   usernameSchema,
   type ClientStep,
   type ProfileCreate,
+  type ProfileUpdate,
   type SetAvatarRequest,
 } from '@dyce/shared';
 import { AuthGuard, CurrentUser, type AuthContext } from '../auth/auth.guard.ts';
@@ -50,6 +53,15 @@ export class ProfileController {
     @Body(new ZodPipe(profileCreateSchema)) body: ProfileCreate,
   ) {
     return this.profiles.createProfile(user.userId, body);
+  }
+
+  /** Change your display name and/or who may send you requests. */
+  @Patch('profile')
+  updateProfile(
+    @CurrentUser() user: AuthContext,
+    @Body(new ZodPipe(profileUpdateSchema)) body: ProfileUpdate,
+  ) {
+    return this.profiles.updateProfile(user.userId, body);
   }
 
   @Post('profile/age-gate')

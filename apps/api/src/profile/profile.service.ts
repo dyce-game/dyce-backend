@@ -5,6 +5,8 @@ import {
   nextOnboardingStep,
   parseAvatar,
   type AvatarConfig,
+  type ProfileUpdate,
+  type RequestPolicy,
   type ClientStep,
   type NextStep,
   type OnboardingState,
@@ -24,6 +26,8 @@ export type Me = {
     xp: number;
     /** Their starter look, or null until they pick one. */
     avatar: AvatarConfig | null;
+    /** Who may send you friend requests and first messages. */
+    requestPolicy: RequestPolicy;
   } | null;
   onboarding: OnboardingState;
   nextStep: NextStep;
@@ -53,9 +57,11 @@ export class ProfileService {
       level: number;
       xp: number;
       avatar: unknown;
-    }>('SELECT username, display_name, is_adult, level, xp, avatar FROM profiles WHERE id = $1', [
-      userId,
-    ]);
+      request_policy: RequestPolicy;
+    }>(
+      'SELECT username, display_name, is_adult, level, xp, avatar, request_policy FROM profiles WHERE id = $1',
+      [userId],
+    );
     const row = p.rows[0];
     const onboarding = await loadOnboardingState(this.pool, userId);
     return {
@@ -68,6 +74,7 @@ export class ProfileService {
             level: row.level,
             xp: row.xp,
             avatar: parseAvatar(row.avatar),
+            requestPolicy: row.request_policy,
           }
         : null,
       onboarding,
@@ -137,6 +144,19 @@ export class ProfileService {
       throw new AuthError(exists.rowCount === 0 ? 'profile_required' : 'age_already_set');
     }
     return { isAdult: r.rows[0]!.is_adult };
+  }
+
+  /** Changes the display name and/or who may send you requests. Returns the updated account. */
+  async updateProfile(userId: string, patch: ProfileUpdate): Promise<Me> {
+    const r = await this.pool.query(
+      `UPDATE profiles
+          SET display_name = coalesce($2, display_name),
+              request_policy = coalesce($3::request_policy, request_policy)
+        WHERE id = $1`,
+      [userId, patch.displayName ?? null, patch.requestPolicy ?? null],
+    );
+    if (r.rowCount === 0) throw new AuthError('profile_required');
+    return this.getMe(userId);
   }
 
   /**

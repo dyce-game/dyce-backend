@@ -15,6 +15,13 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 - Personal "My code" (`/u/<username>`) and paying it; Pool stake UI and disputes
 - A scheduled job that expires old requests and updates their chat cards; push for money received / requested
 
+## Profile and Settings follow-ups (deferred from ADR-015)
+- Change username: cooldown (design says 30 days) and a reservation of the old name (14 days); rules not in the SPEC yet
+- Settings that need their feature: notification switches (push), who can see me online and Show me in Space (presence, Space search), Pool limits and Free-only (Pools), read receipts switch
+- Download my data and Delete account (balance cleared, history anonymised; NDPA 2023); Help and legal screens (needs the legal copy)
+- Profile stats, badges, head-to-head, level curve and XP bar; Share profile (invite links)
+- Gate pushed screens (`/settings`, `/profile`) behind sign-in like the tabs are
+
 ## Safety follow-ups (deferred from ADR-013)
 - A moderation queue and the actions on a report (warn, mute, suspend), outcome notifications to the reporter
 - Hold and refund a Pool stake when cheating is reported; attach game moves as evidence once matches exist

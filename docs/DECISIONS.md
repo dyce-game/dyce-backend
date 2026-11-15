@@ -2,6 +2,16 @@
 
 One entry per decision, newest first. App-side decisions (ADR-001 stack, 002 avatar system, 003 domain, 006 hoisted node_modules for Metro) are in `Dyce/docs/DECISIONS.md`.
 
+## ADR-015 · Profile and Settings · 2026-11-15
+Context: SPEC §12 lists Settings (account, privacy, notifications, blocked, Pool limits, data, help and legal) and §10 the profile. Most of those controls need features that don't exist yet; one real privacy control does: `profiles.request_policy` (`everyone | fof | nobody`) is already enforced by friend requests and first messages.
+Decision:
+- **`PATCH /profile`** changes `displayName` (1-40 characters) and/or `requestPolicy` and returns the updated `/me`. The schema is strict, so the username can't be sent: **changing a username is deliberately not built**, because the design promises a 30-day cooldown and a 14-day reservation of the old name that the SPEC doesn't define (BACKLOG). `GET /me` now includes `profile.requestPolicy`.
+- **Only controls that do something are shown.** Settings has "Who can add and message me" (Everyone / Friends of friends / Nobody, saved immediately, and checked end to end: with Nobody a stranger's friend request is refused with `requests_closed`), your account details, Blocked people, a read-only Theme row ("Follows your phone": no in-app theme toggle, CLAUDE.md) and Log out. Not shown until their feature exists: notification switches (push), "who can see me online" and Show me in Space (presence, Space search), Pool limits and Free-only (Pools), Download my data and Delete account (data export and deletion jobs: NDPA work, BACKLOG), Help and legal (legal copy).
+- **Profile** shows avatar (with an edit button to the starter-look picker), name, @username, level and XP, a Friends card (count and waiting requests), Edit profile and Settings. The design's stat cards, badges, Notifications card, Share and Lagos location wait for games, badges, push, invite links and city opt-in. The XP bar waits for a level curve the docs don't define.
+- **Entry point:** the header avatar on every tab opens Profile; Friends, Edit profile, Settings and Blocked people are reached from there.
+- **Log out** tells the server to end the session (best effort, so it works offline), clears cached data and leaves for Welcome.
+Consequences: no migration. Owner: social-discovery-engineer
+
 ## ADR-014 · Avatars, phase A: starter looks · 2026-11-15
 Context: AVATAR_GUIDEBOOK §8 phase A ships the 220 generated profiles as the player's look until the editable 3D rig exists (phase B). The backend is NestJS + PostgreSQL with no Supabase Storage, and nothing renders avatars server-side yet.
 Decision:

@@ -17,6 +17,7 @@ Owner: qa-engineer. Server-side layers for `dyce-backend`; the app side is in `.
 | Friends list, accept, ignore, cancel, remove (silent ignore, races, blocks) | Jest + real PostgreSQL | `apps/api/db/tests/friends.test.ts` | `pnpm test:db` |
 | Messaging: conversations, Requests, limits, read state, paging, blocks, races | Jest + real PostgreSQL | `apps/api/db/tests/messages.test.ts` | `pnpm test:db` |
 | Wallet: send, requests and codes, history, receipts, cards, idempotency, races, limits | Jest + real PostgreSQL | `apps/api/db/tests/wallet.test.ts` | `pnpm test:db` |
+| Profile update: name and request policy, strict schema (no username), no profile | Jest + real PostgreSQL | `packages/shared/src/profile.test.ts`, `apps/api/db/tests/profile.test.ts` | `pnpm test`, `pnpm test:db` |
 | Avatar: starter look ids, strict config, `parseAvatar`; save/change/onboarding step; friends and chats carry the look | Jest + real PostgreSQL | `packages/shared/src/avatar.test.ts`, `apps/api/db/tests/avatar.test.ts` | `pnpm test`, `pnpm test:db` |
 | Block and report: blocking cuts off chat/money/friend requests, unblock, reports with evidence snapshot, duplicates, daily limit, constraints | Jest + real PostgreSQL | `apps/api/db/tests/safety.test.ts` | `pnpm test:db` |
 | Realtime hub and WebSocket server (auth frame, token expiry, typing, limits) | Jest + real sockets | `apps/api/src/chat/realtime.test.ts` | `pnpm test` |

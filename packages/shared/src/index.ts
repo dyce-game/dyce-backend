@@ -10,3 +10,4 @@ export * from './schemas/messages.ts';
 export * from './schemas/wallet.ts';
 export * from './schemas/safety.ts';
 export * from './schemas/avatar.ts';
+export * from './schemas/profile.ts';
