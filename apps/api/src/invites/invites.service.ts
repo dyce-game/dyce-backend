@@ -84,7 +84,7 @@ type RunRow = {
 
 /**
  * SMS invites for people who are not on Dyce, the guest game they can play in a browser, and joining up when
- * they sign up (ADR-020).
+ * they sign up (ADR-021).
  *
  * The number only exists in memory while the text goes out: the row keeps `HMAC(PHONE_HASH_SALT, number)`.
  * The link is `<base>/i/<token>#p=<digits>`; the fragment hands the number to the invitee's own browser (to

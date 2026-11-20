@@ -108,7 +108,9 @@ export type RealtimeEvent =
   /** A match you're in changed (accepted, moved, finished). Each player gets their own view of it. */
   | { type: 'match'; match: MatchView }
   /** A space you're in changed (someone sat down or left, it started, it ended). */
-  | { type: 'space'; space: SpaceView };
+  | { type: 'space'; space: SpaceView }
+  /** Something new for the Notifications list (the list and its count refetch). */
+  | { type: 'notification'; unread: number };
 
 /** Client to server. The first frame must be `auth`. */
 export type RealtimeClientFrame =

@@ -22,7 +22,13 @@ export const queryKeys = {
   poolInfo: ['pool-info'] as const,
   spaces: (scope: string) => ['spaces', scope] as const,
   space: (id: string) => ['space', id] as const,
-  leaderboard: (scope: string) => ['leaderboard', scope] as const,
+  leaderboard: (scope: string, metric: string, game: string) =>
+    ['leaderboard', scope, metric, game] as const,
   notifications: ['notifications'] as const,
+  notificationList: (filter: string) => ['notifications', 'list', filter] as const,
+  notificationUnread: ['notifications', 'unread'] as const,
+  notificationPrefs: ['notifications', 'prefs'] as const,
+  badges: ['badges'] as const,
+  peopleSearch: (q: string) => ['search', 'people', q] as const,
   appConfig: ['app-config'] as const,
 } as const;

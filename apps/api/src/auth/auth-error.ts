@@ -74,7 +74,9 @@ export type AuthErrorCode =
   | 'invite_too_soon'
   | 'guest_unauthorized'
   | 'guest_already_played'
-  | 'guest_game_unavailable';
+  | 'guest_game_unavailable'
+  // discovery and notifications
+  | 'search_rate_limited';
 
 const STATUS: Record<AuthErrorCode, number> = {
   validation_failed: 422,
@@ -146,6 +148,7 @@ const STATUS: Record<AuthErrorCode, number> = {
   guest_unauthorized: 401,
   guest_already_played: 409,
   guest_game_unavailable: 422,
+  search_rate_limited: 429,
 };
 
 /** An expected, user-facing failure. Mapped to `{ code, message, ...details }` by the HTTP filter. */

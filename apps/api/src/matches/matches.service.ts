@@ -558,7 +558,7 @@ export class MatchesService {
   }
 
   /**
-   * Turns an SMS invite into a normal Free match once the invitee has signed up (ADR-020). `id` is the invite's
+   * Turns an SMS invite into a normal Free match once the invitee has signed up (ADR-021). `id` is the invite's
    * id, so a retry is harmless. With `played` (the moves a guest made in the browser, already screened) the new
    * user's turn is replayed through the engine on the guest's own seed: they keep their score and the inviter
    * plays next. Without it the inviter simply sends the game as a fresh invite. Returns the match id.

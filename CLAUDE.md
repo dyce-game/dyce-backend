@@ -15,7 +15,7 @@ If the docs and the design disagree, the docs win. If the docs are silent, pick 
 ## What is in this repo
 ```
 apps/api            NestJS API (REST + WebSocket /realtime) on PostgreSQL. SQL migrations in db/migrations, tests in db/tests
-apps/game-server    Colyseus realtime game server (not started)
+apps/game-server    Colyseus realtime game server: one room per live match (Whot! first, ADR-022)
 packages/shared     zod schemas, money + formatting utils, query keys, config. Linked by the app
 packages/games      Pure TypeScript rules engines + the GameEngine contract. Linked by the app
 ```

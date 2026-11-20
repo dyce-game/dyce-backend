@@ -37,6 +37,7 @@ describe('validateEnv', () => {
       ...base,
       NODE_ENV: 'production',
       SMS_DRIVER: 'real',
+      PUSH_DRIVER: 'expo',
       TERMII_API_KEY: 'k',
       TERMII_SENDER_ID: 'Dyce',
     };
@@ -51,6 +52,9 @@ describe('validateEnv', () => {
     });
     it('refuses the console SMS driver in production', () => {
       expect(() => validateEnv({ ...prod, SMS_DRIVER: 'console' })).toThrow(/SMS_DRIVER/);
+    });
+    it('refuses the console push driver in production', () => {
+      expect(() => validateEnv({ ...prod, PUSH_DRIVER: 'console' })).toThrow(/PUSH_DRIVER/);
     });
   });
 

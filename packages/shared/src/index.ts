@@ -14,3 +14,5 @@ export * from './schemas/profile.ts';
 export * from './schemas/games.ts';
 export * from './schemas/spaces.ts';
 export * from './schemas/invites.ts';
+export * from './schemas/social.ts';
+export * from './schemas/notifications.ts';

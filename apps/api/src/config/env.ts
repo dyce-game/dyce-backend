@@ -41,6 +41,10 @@ export const envSchema = z
     GAME_SERVER_URL: optional(z.url()),
     GAME_SERVER_PUBLIC_URL: optional(z.string().regex(/^wss?:\/\//)),
     INTERNAL_SECRET: optional(z.string().min(32)),
+    /** Push notifications: "console" prints them (dev); "expo" sends through the Expo Push API (required in production). */
+    PUSH_DRIVER: z.enum(['console', 'expo']).default('console'),
+    /** Optional Expo access token (enhanced push security). */
+    EXPO_ACCESS_TOKEN: optional(z.string().min(1)),
     /** Number of reverse-proxy hops to trust for client IPs (rate limiting). 0 = none. */
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
   })
@@ -51,6 +55,7 @@ export const envSchema = z
     if (env.NODE_ENV === 'production') {
       if (env.OTP_TEST_CODE) fail('OTP_TEST_CODE', 'must not be set in production');
       if (env.SMS_DRIVER !== 'real') fail('SMS_DRIVER', 'must be "real" in production');
+      if (env.PUSH_DRIVER !== 'expo') fail('PUSH_DRIVER', 'must be "expo" in production');
     }
     if (env.SMS_DRIVER === 'real' && !hasTermii(env) && !hasTwilio(env)) {
       fail(

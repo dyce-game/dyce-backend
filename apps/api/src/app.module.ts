@@ -7,10 +7,12 @@ import { AuthModule } from './auth/auth.module.ts';
 import { ChatModule } from './chat/chat.module.ts';
 import { validateEnv } from './config/env.ts';
 import { DbModule } from './db/db.module.ts';
+import { DiscoveryModule } from './discovery/discovery.module.ts';
 import { HealthController } from './health/health.controller.ts';
 import { InvitesModule } from './invites/invites.module.ts';
 import { LedgerModule } from './ledger/ledger.module.ts';
 import { MatchesModule } from './matches/matches.module.ts';
+import { NotificationsModule } from './notifications/notifications.module.ts';
 import { SafetyModule } from './safety/safety.module.ts';
 import { SocialModule } from './social/social.module.ts';
 import { SpacesModule } from './spaces/spaces.module.ts';
@@ -32,6 +34,8 @@ import { WalletModule } from './wallet/wallet.module.ts';
     SafetyModule,
     InvitesModule,
     SpacesModule,
+    DiscoveryModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
   providers: [{ provide: APP_GUARD, useClass: ThrottlerGuard }],
