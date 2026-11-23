@@ -10,6 +10,9 @@ import { imposterEngine, type ImposterAction } from '../imposter/engine.ts';
 import { werewolfEngine, type WerewolfAction } from '../werewolf/engine.ts';
 import { whotAutoAction, whotEngine } from '../whot/engine.ts';
 import { solveWordHuntBoard, wordHuntDictionary, wordHuntEngine } from '../wordhunt/engine.ts';
+import { computeWordArcadeReport } from './wordarcade.ts';
+import { computeBoardGamesReport } from './boardgames.ts';
+import { computeSportsReport } from './sports.ts';
 
 /**
  * Cross-runtime determinism scenario (docs/ARCHITECTURE.md §6).
@@ -183,6 +186,9 @@ export function computeDeterminismReport(): Record<string, string> {
   for (const seed of SCENARIO_SEEDS) report[`werewolf:${seed.toString()}`] = werewolfGame(seed);
   for (const seed of SCENARIO_SEEDS) report[`charades:${seed.toString()}`] = charadesGame(seed);
   for (const seed of SCENARIO_SEEDS) report[`doodle:${seed.toString()}`] = doodleGame(seed);
+  Object.assign(report, computeWordArcadeReport(SCENARIO_SEEDS)); // anagrams, filler, wordtiles, minigolf, tanks
+  Object.assign(report, computeBoardGamesReport(SCENARIO_SEEDS)); // chess, checkers, ayo, kalah, dots, ludo, sea battle
+  Object.assign(report, computeSportsReport(SCENARIO_SEEDS)); // darts, archery, basketball, 8 ball
   return report;
 }
 
@@ -229,6 +235,74 @@ export const GOLDEN = {
     'doodle:42': 'f33bd2c4c94c617e',
     'doodle:3735928559': 'ec21abe0cca5d4ac',
     'doodle:9223372036854788153': 'e53d551476baa922',
+    'anagrams:1': '6ea72182f6279b79',
+    'anagrams:42': '353bbecf3cd79ee0',
+    'anagrams:3735928559': '9e2b4f40a0309ac4',
+    'anagrams:9223372036854788153': '95e4b5facdb32474',
+    'filler:1': '98b3d818330174bb',
+    'filler:42': '6c8dc11c877cc37d',
+    'filler:3735928559': '3b8f409a56dcd783',
+    'filler:9223372036854788153': 'aa41baa02ac34479',
+    'wordtiles:1': '46434c1f9c3667c2',
+    'wordtiles:42': '37e1544c82e52a86',
+    'wordtiles:3735928559': '1f6316349e88d732',
+    'wordtiles:9223372036854788153': 'd6fd72499289f64a',
+    'minigolf:1': '46cfb582748f06de',
+    'minigolf:42': '51899b993359c2cd',
+    'minigolf:3735928559': 'c9a267b16e8b69e4',
+    'minigolf:9223372036854788153': 'b64aeb907a2fae82',
+    'tanks:1': '3f0b95158a51a691',
+    'tanks:42': '574da40d04d0bd44',
+    'tanks:3735928559': 'ba76fc769f02b3f5',
+    'tanks:9223372036854788153': 'db7371e7b0c6e469',
+    'chess:1': '509e315b35efd483',
+    'chess:42': 'f666aa750426d22c',
+    'chess:3735928559': 'a0e59b94a0e0fb91',
+    'chess:9223372036854788153': 'ef01cb8c6b9a7aa6',
+    'checkers:1': '2b8254fa5284a8fe',
+    'checkers:42': 'dbeb32cdfaf0fb8b',
+    'checkers:3735928559': '4a0b164ba96572ff',
+    'checkers:9223372036854788153': '0e5c23901450fc1f',
+    'ayo:1': 'c4118dcca7dca10f',
+    'ayo:42': '28e81f01ca8192da',
+    'ayo:3735928559': '9af7f7378b3cbc24',
+    'ayo:9223372036854788153': '35be2978ddeaceea',
+    'kalah:1': '4b264d2d5cbd0c9a',
+    'kalah:42': '1c0343aaa736614f',
+    'kalah:3735928559': 'd491edce3ee13798',
+    'kalah:9223372036854788153': 'cad20be943b6e409',
+    'dotsandboxes:1': '5dd81dbd65e6fd06',
+    'dotsandboxes:42': '0d552c8128e87774',
+    'dotsandboxes:3735928559': '1b394a2db4d1f725',
+    'dotsandboxes:9223372036854788153': '4ee445438c0815c8',
+    'ludo:1': '2b4433366b156194',
+    'ludo:42': '54370a25152d98dc',
+    'ludo:3735928559': '63c24501f7d13dde',
+    'ludo:9223372036854788153': 'add99726fd8774f3',
+    'seabattle:1': 'f9b64476fce1b925',
+    'seabattle:42': 'f7bfbdbcc99e137e',
+    'seabattle:3735928559': '776823f65bb80a5b',
+    'seabattle:9223372036854788153': 'd81df12580c1e500',
+    'seasalvo:1': 'b7f1692728902a47',
+    'seasalvo:42': 'aa5b1ddeceb8b12e',
+    'seasalvo:3735928559': 'bc54554507f1cafe',
+    'seasalvo:9223372036854788153': 'c9e07ef60f9e4400',
+    'darts:1': 'f98d5b7d0565fbf1',
+    'darts:42': '79ab6cf8a6785e21',
+    'darts:3735928559': 'c5150e8c2520ca43',
+    'darts:9223372036854788153': 'ecdfe5c0221bdc1e',
+    'archery:1': 'f9f15fb148a140ff',
+    'archery:42': '97e0d4623b5cc985',
+    'archery:3735928559': '26c2385310b0ace2',
+    'archery:9223372036854788153': 'f09e6679880e1171',
+    'basketball:1': 'ba1b54c5e9932906',
+    'basketball:42': '5cec4643211e24cc',
+    'basketball:3735928559': '33b7e80ba22ab25e',
+    'basketball:9223372036854788153': 'd8bd47fb47ebeefb',
+    'eightball:1': 'c0b0371a2de4503d',
+    'eightball:42': 'b19501a27e9493ce',
+    'eightball:3735928559': '0d8c09cc51fd7036',
+    'eightball:9223372036854788153': '8fac094f13695b5a',
   } as Record<string, string>,
 };
 
