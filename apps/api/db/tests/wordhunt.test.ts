@@ -100,6 +100,7 @@ describe('catalogue', () => {
       maxPlayers: 2,
       categories: ['word'],
       supportsPool: false,
+      poolMinKobo: 20_000,
     });
   });
 });

@@ -51,8 +51,8 @@ Identity and social
 
 Messaging
 
-- `conversations(id, kind enum(direct, group, bot, sms), title, photo_url, created_by, created_at, last_message_at)`
-- `conversation_members(conversation_id, user_id, role enum(member, admin), state enum(active, request, declined, left), last_read_at, muted_until)` — `state = request` is how stranger messages stay in Requests.
+- `conversations(id, kind enum(direct, group, bot, sms), title, photo_url, bot_slug, created_by, created_at, last_message_at)` — groups need a title (CHECK), bots a `bot_slug` (one per person per bot); ADR-038.
+- `conversation_members(conversation_id, user_id, role enum(member, admin), state enum(active, request, declined, left), last_read_at, muted_until, joined_at)` — `joined_at` limits a group member's history; `left` covers leaving and removal. — `state = request` is how stranger messages stay in Requests.
 - `messages(id, conversation_id, sender_id, kind enum(text, voice, image, game, money_sent, money_request, poll, system, sms_invite), body text, payload jsonb, reply_to uuid, created_at, edited_at, deleted_at)`
 - `reactions(message_id, user_id, emoji text)` (reaction set is a fixed list, rendered as icons)
 - `sms_invites(id, inviter_id, phone_hash, game_slug, match_id, token unique, status enum(sent, opened, played, joined), created_at, expires_at, opened_at, played_at, joined_at, joined_user_id)`; `guest_runs(id, invite_id unique, token_hash, game_slug, seed, state jsonb, moves jsonb, run_state, expires_at, finished_at)` is the guest's browser round (ADR-021)
@@ -109,6 +109,8 @@ _Implemented (ADR-016):_ NestJS `MatchesService` (`apps/api/src/matches`): `GET 
 
 *Implemented (ADR-022):* Spaces are NestJS endpoints (`/spaces`: create, lookup, join by code, leave, remove, close, start, connect); `start` initialises the engine, flips the match to `active` and calls the game server's signed `POST /internal/rooms`. The room (`apps/game-server`) verifies the API's JWT, persists every move, sends each seat its own `LiveState`, forfeits a seat after 60 s offline or on `leave` (Free and Pool alike), and settles through `settle_match` in the transaction that finishes the match. The room is a cache of the match row and is rebuilt from it after a restart.
 
+*Implemented (ADR-025):* the same room serves two kinds of game. Turn rooms (Whot!, Crazy Cards) are `LiveMatch`; party rooms (Imposter, Werewolf, Charades, Doodle Guess) are `PartyMatch`, which feeds the engines `tick` actions as real time passes, starts its clocks when every seat has connected, sends each seat only what changed in its own view, streams the Doodle canvas as deltas, and keeps a small table talk channel. Quick match (`/quick-match`) pairs two strangers, escrows their stakes at the match and opens a hidden two-seat Space. The messages are in `docs/PARTY_ROOM_PROTOCOL.md`.
+
 ## 6. Physics games and fairness
 
 Cup Pong, 8 Ball, Mini Golf, Basketball, Archery, Darts, Tanks. The client sends **input only** (e.g. `{ angle, power, spin }` or a swipe vector, quantised to fixed precision). Both client and server run the same **deterministic** simulation in `packages/games/src/physics` (fixed timestep 1/120s, fixed-point or carefully ordered float math, no platform-dependent functions). The server's result is final. The client animates its own prediction and corrects if the server disagrees (rare). Wind/jitter values come from the seeded RNG. Physics library options: a small custom 2D/2.5D sim (preferred for table/target games) or Rapier's deterministic build; whichever is chosen, add a cross-runtime determinism test (same inputs → identical outcome hash in Node, Deno and Hermes).
@@ -121,20 +123,26 @@ Cup Pong, 8 Ball, Mini Golf, Basketball, Archery, Darts, Tanks. The client sends
 
 ## 8. Realtime chat
 
-(ADR-010 replaces the original Supabase Realtime design.) Messages are stored and read over HTTP: `POST /conversations/:id/messages` (client-generated UUID, idempotent; checks membership, blocks, request rules and limits), `GET /conversations/:id/messages` (cursor paging), `GET /conversations`, `POST .../read`, `.../accept`, `.../decline`. Live delivery is a WebSocket at `/realtime` on the same server (`ws`): authenticate with the first frame, then receive `message`, `read` and `typing` events and send `typing`. The socket closes when its access token expires and the app reconnects. Everything the socket carries is also available over HTTP, so a missed event costs only latency. The hub is in-process; running several instances needs Redis pub/sub.
+(ADR-010 replaces the original Supabase Realtime design.) Messages are stored and read over HTTP: `POST /conversations/:id/messages` (client-generated UUID, idempotent; checks membership, blocks, request rules and limits), `GET /conversations/:id/messages` (cursor paging), `GET /conversations`, `POST .../read`, `.../accept`, `.../decline`. Groups, bots, replies, reactions, deletes and polls (ADR-038): `POST /conversations/groups`, `GET|POST /conversations/:id/members`, `DELETE .../members/:userId`, `PUT .../members/:userId/role`, `PATCH /conversations/:id`, `POST .../leave`, `POST /conversations/bots/:slug`, `PUT .../messages/:mid/reaction`, `DELETE .../messages/:mid?scope=me|everyone`, `POST .../polls`, `PUT .../messages/:mid/vote`; `messages` also holds `message_hides` and `poll_votes`. Live delivery is a WebSocket at `/realtime` on the same server (`ws`): authenticate with the first frame, then receive `message`, `read`, `typing`, `reaction`, `poll`, `message_deleted` and `conversation` events and send `typing`. The socket closes when its access token expires and the app reconnects. Everything the socket carries is also available over HTTP, so a missed event costs only latency. The hub is in-process; running several instances needs Redis pub/sub.
 
 ## 9. Security
 
 - Supabase JWT everywhere; Colyseus verifies JWT with the project's JWKS.
 - Service role key only in Edge Functions and game-server, never in the app.
-- Rate limits: requests to strangers (20/day), money requests (30/day), SMS invites (50/day per sender, 3/day per number, 1/min per pair; ADR-021), OTP (Supabase limits + per-IP).
-- App integrity: Play Integrity / App Attest checks required before first Pool (via Edge Function), with a soft-fail flag in `app_config`.
+- Rate limits: every limit is in `docs/RATE_LIMITS.md` (requests to strangers 20/day, money requests 30/day, strangers' codes 20/day, SMS invites, OTP). HTTP throttles count the signed-in account, anonymous requests the address (ADR-039).
+- Integrity (ADR-039): Pool matches are judged when they would settle (`settle_or_hold`): collusion and timing signals, and a payout hold a moderator decides. Moderation runs through a separate database role (`dyce_admin`), views and audited SQL functions, behind admin tokens; the public API role cannot reach them.
+- App integrity: Play Integrity / App Attest at Pool entry through `IntegrityGate` and an `AttestationVerifier` (dev driver passes, production stub fails closed), enforced only when `integrity_required` is true in `app_config`.
 - Secrets in EAS secrets and Supabase vault. No secrets in the repo.
 
-## 10. Observability
+## 10. Observability and operations (ADR-040)
 
-Sentry (app, Edge Functions, game-server) with release tags from EAS. PostHog events (see BUILD_PLAN analytics list). Structured logs in Edge Functions and game-server. A `/health` endpoint on game-server.
+- **Logs:** one JSON object per line (`ts, level, service, release, requestId, msg, ...`) from the API and the game server, redacted by `packages/shared/src/redact.ts` (phone numbers, tokens, secrets never reach a log). The access line carries the route pattern, never the URL. Every response carries `X-Request-Id`.
+- **Errors:** Sentry in the app, the API and the game server, each behind its own DSN; with no DSN the SDK is not even loaded. Events are scrubbed. Only 5xx are reported from the API; expected errors (`DyceError`, `AuthError`, rate limits) are not.
+- **Probes:** `/health/live` (process only), `/health/ready` (database up and not draining; reports `release` and the newest `schema`), `/health` (back-compat); the game server has `/health/live` and `/health/ready`.
+- **Money:** the nightly `ledger_check_invariants` job (02:15 Africa/Lagos, advisory-locked, catch-up at boot) writes `ledger_check_runs` and alerts on a problem or on failing to run; `node db/ledger-gate.ts` answers the "clean for 14 days" launch gate.
+- **Alerts and runbook:** definitions in `Dyce/docs/MONITORING.md`, procedures in `Dyce/docs/RUNBOOK.md`.
+- **Single instance:** the realtime hub, the throttler counters and the game rooms are in memory. More than one API replica needs Redis pub/sub behind `RealtimeHub.publish` (ADR-010), shared throttling and locked crons; more than one game server needs a matchmaker (RUNBOOK section 12).
 
 ## 11. Environments
 
-`local` (supabase start + local game-server), `staging`, `production`. EAS build profiles: development (dev client), preview (internal), production. OTA updates through EAS Update channels matching profiles. Database changes only through migrations applied by CI.
+`local` (supabase start + local game-server), `staging`, `production`. EAS build profiles: development (dev client), preview (internal), production. OTA updates through EAS Update channels matching profiles. Database changes only through migrations applied as a separate deploy step with the owner role (`node db/migrate.ts`, see `Dyce/docs/RUNBOOK.md`); the services connect as `dyce_app`. `docker compose up` runs the whole backend locally in the production order. Every setting is documented in `deploy/production.env.example`.

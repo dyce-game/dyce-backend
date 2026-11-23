@@ -48,12 +48,13 @@ Wallet › Send, or the ₦ button in a chat. Pick a friend (only friends and co
 
 **Personal "My code".** Wallet › My code shows a static QR for `https://dyce.games/u/<username>` — scanning it opens the Pay sheet with an amount field (and also offers "Add friend" / "Challenge").
 
-**Safety.** Codes are random and single-use (amount requests). Requests expire. A user can have at most 10 open requests. Pay sheet always shows the real profile from the server, never data inside the QR. Rate limit scans that resolve to strangers (20/day).
+**Safety.** Codes are random and single-use (amount requests). Requests expire. A user can have at most 10 open requests and make 30 a day. Pay sheet always shows the real profile from the server, never data inside the QR. Scans that resolve to strangers are limited to 20 different codes a day (`stranger_scans`; both limits were only config until ADR-039). See `docs/RATE_LIMITS.md`.
 
 ## 5. Pools
 Flow 1v1: sender picks stake → `stake_pool()` for the sender at invite time → invitee sees Match / Counter / Play free → Match = `stake_pool()` for invitee → match active. Counter (ADR-018): the invitee proposes a smaller stake, or 0 to play free, once; nothing moves until the sender accepts, which gives the sender the difference back (`restake_pool`) and takes the invitee's counter stake in one transaction; declining refunds everything. No response in 24h → `refund_match()`. Space pools: each seat pays the seat fee on join; leaving a waiting space refunds; once live, leaving forfeits.
 Payout schemes: `winner_all`, `p50_30_20`, `p60_40` (by placement). No house fee in v1.
 Pool requires `is_adult` and passing daily limits (`daily_usage`). Limits are config values; users can set lower personal limits in Settings.
+**Held payouts (ADR-039).** A Pool match calls `settle_or_hold(match)` where it used to call `settle_match`. If the integrity signals for the match add up to the hold threshold, the escrow stays open, nothing moves, the match is `disputed` and a moderator later calls `resolve_integrity_hold`: release (`settle_match` as decided), void (`refund_match`: every stake back) or disqualify one player (placed last, then `settle_match`). A hold nobody decides pays out as decided after 72 hours. No other money path is added; a hold never reaches back to a pot that was already paid.
 
 ## 6. Daily top-up
 If balance < ₦10,000 the user can claim a free ₦20,000 top-up once per day (`system_topup`). Shown as a pill on the Wallet header and on the "Not enough Dyce Cash" sheet. Values in `app_config`.

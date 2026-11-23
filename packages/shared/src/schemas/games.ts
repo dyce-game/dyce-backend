@@ -69,6 +69,8 @@ export type GameInfo = {
   maxPlayers: number;
   categories: string[];
   supportsPool: boolean;
+  /** The smallest Pool stake for this game (docs/GAMES.md), in kobo; null = just the platform minimum. */
+  poolMinKobo: number | null;
 };
 
 export type GamesResponse = { games: GameInfo[] };

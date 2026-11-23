@@ -38,12 +38,28 @@ describe('validateEnv', () => {
       NODE_ENV: 'production',
       SMS_DRIVER: 'real',
       PUSH_DRIVER: 'expo',
+      INTEGRITY_DRIVER: 'store',
       TERMII_API_KEY: 'k',
       TERMII_SENDER_ID: 'Dyce',
     };
 
     it('accepts a properly configured production env', () => {
       expect(validateEnv(prod).NODE_ENV).toBe('production');
+    });
+    it('refuses the pass-everything device check in production', () => {
+      expect(() => validateEnv({ ...prod, INTEGRITY_DRIVER: 'dev' })).toThrow(/INTEGRITY_DRIVER/);
+    });
+    it('needs an admin database for the moderation tokens', () => {
+      expect(() => validateEnv({ ...prod, ADMIN_TOKENS: `amaka:${'a'.repeat(32)}` })).toThrow(
+        /ADMIN_DATABASE_URL/,
+      );
+      expect(
+        validateEnv({
+          ...prod,
+          ADMIN_TOKENS: `amaka:${'a'.repeat(32)}`,
+          ADMIN_DATABASE_URL: 'postgres://m@localhost/dyce',
+        }).ADMIN_TOKENS,
+      ).toBeDefined();
     });
     it('refuses a test OTP code in production', () => {
       expect(() => validateEnv({ ...prod, OTP_TEST_CODE: '123456' })).toThrow(

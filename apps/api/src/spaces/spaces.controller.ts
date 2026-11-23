@@ -21,6 +21,7 @@ import {
 } from '@dyce/shared';
 import { AuthGuard, CurrentUser, type AuthContext } from '../auth/auth.guard.ts';
 import { ZodPipe } from '../common/zod.pipe.ts';
+import { PoolEntry, PoolEntryGuard } from '../integrity/pool-entry.guard.ts';
 import { SpacesService } from './spaces.service.ts';
 
 const idPipe = new ZodPipe(spaceIdParamSchema);
@@ -41,6 +42,8 @@ export class SpacesController {
   @Post()
   @HttpCode(200)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @PoolEntry('body')
+  @UseGuards(PoolEntryGuard)
   create(
     @CurrentUser() user: AuthContext,
     @Body(new ZodPipe(createSpaceSchema)) body: CreateSpaceRequest,
@@ -58,6 +61,8 @@ export class SpacesController {
   @Post('join')
   @HttpCode(200)
   @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @PoolEntry('space')
+  @UseGuards(PoolEntryGuard)
   join(
     @CurrentUser() user: AuthContext,
     @Body(new ZodPipe(joinSpaceSchema)) body: { code: string },

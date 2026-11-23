@@ -6,10 +6,11 @@ export const queryKeys = {
   walletHistory: (filter: string) => ['wallet', 'history', filter] as const,
   receipt: (txnId: string) => ['wallet', 'receipt', txnId] as const,
   paymentRequest: (code: string) => ['payment-request', code] as const,
-  /** Prefix for every conversation list (all / friends / requests). */
+  /** Prefix for every conversation list (all / friends / groups / requests / bots). */
   conversationsAll: ['conversations'] as const,
   conversations: (filter: string) => ['conversations', filter] as const,
   conversation: (id: string) => ['conversation', id] as const,
+  groupMembers: (id: string) => ['conversation', id, 'members'] as const,
   messages: (conversationId: string) => ['messages', conversationId] as const,
   requests: ['requests'] as const,
   /** Prefix for everything friends-related: invalidating it refreshes the list and the requests. */
@@ -22,6 +23,7 @@ export const queryKeys = {
   poolInfo: ['pool-info'] as const,
   spaces: (scope: string) => ['spaces', scope] as const,
   space: (id: string) => ['space', id] as const,
+  quickMatch: ['quick-match'] as const,
   leaderboard: (scope: string, metric: string, game: string) =>
     ['leaderboard', scope, metric, game] as const,
   notifications: ['notifications'] as const,
@@ -31,4 +33,6 @@ export const queryKeys = {
   badges: ['badges'] as const,
   peopleSearch: (q: string) => ['search', 'people', q] as const,
   appConfig: ['app-config'] as const,
+  dispute: (matchId: string) => ['dispute', matchId] as const,
+  deletion: ['account', 'deletion'] as const,
 } as const;

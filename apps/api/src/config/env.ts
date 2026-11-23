@@ -45,8 +45,44 @@ export const envSchema = z
     PUSH_DRIVER: z.enum(['console', 'expo']).default('console'),
     /** Optional Expo access token (enhanced push security). */
     EXPO_ACCESS_TOKEN: optional(z.string().min(1)),
+    /** Device integrity at Pool entry (ADR-039): `dev` always passes (refused in production); `store` fails closed
+     *  until the Play Integrity / App Attest verification is written. Only consulted when `integrity_required`. */
+    INTEGRITY_DRIVER: z.enum(['dev', 'store']).default('dev'),
+    /** The moderation API (ADR-039): a login role in `dyce_admin`, and `name:token,name:token` (tokens 32+ chars).
+     *  Both must be set or the admin routes answer 404. */
+    ADMIN_DATABASE_URL: optional(z.string().min(1)),
+    ADMIN_TOKENS: optional(z.string().min(1)),
     /** Number of reverse-proxy hops to trust for client IPs (rate limiting). 0 = none. */
     TRUST_PROXY_HOPS: z.coerce.number().int().min(0).max(5).default(0),
+
+    // --- Operations (docs/RUNBOOK.md, docs/MONITORING.md) ---
+    /** Git sha or version of this build; shown by /health/ready, tagged on logs and Sentry events. */
+    RELEASE: optional(z.string().min(1)),
+    LOG_LEVEL: z.enum(['error', 'warn', 'info', 'debug']).default('info'),
+    /** "json" for log shipping (default in production), "pretty" for a terminal. */
+    LOG_FORMAT: optional(z.enum(['json', 'pretty'])),
+    /** Error reporting. No DSN = Sentry is not even loaded. */
+    SENTRY_DSN: optional(z.url()),
+    SENTRY_ENVIRONMENT: optional(z.string().min(1)),
+    SENTRY_TRACES_SAMPLE_RATE: z.coerce.number().min(0).max(1).default(0),
+    /** On SIGTERM: report "draining" on /health/ready for this long before closing, so the load balancer stops first. */
+    SHUTDOWN_DRAIN_MS: z.coerce.number().int().min(0).max(60_000).default(0),
+    /** Hard stop: if graceful shutdown takes longer than this, exit anyway. */
+    SHUTDOWN_TIMEOUT_MS: z.coerce.number().int().min(1000).max(120_000).default(25_000),
+    /** Where critical alerts are posted (Slack-style incoming webhook). Unset = alerts only reach the log and Sentry. */
+    ALERT_WEBHOOK_URL: optional(z.url()),
+    /** Nightly ledger_check_invariants job (02:15 Africa/Lagos). Keep on everywhere except throwaway environments. */
+    LEDGER_CHECK_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    /** On a wallet mismatch, freeze Pool for the affected users until a human clears it (ledger_check_invariants(true)). */
+    LEDGER_CHECK_FREEZE: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    /** Pinged (GET) after every CLEAN nightly run; a dead-man's-switch monitor alerts when the pings stop. */
+    LEDGER_CHECK_HEARTBEAT_URL: optional(z.url()),
   })
   .superRefine((env, ctx) => {
     const fail = (path: string, message: string) =>
@@ -56,6 +92,18 @@ export const envSchema = z
       if (env.OTP_TEST_CODE) fail('OTP_TEST_CODE', 'must not be set in production');
       if (env.SMS_DRIVER !== 'real') fail('SMS_DRIVER', 'must be "real" in production');
       if (env.PUSH_DRIVER !== 'expo') fail('PUSH_DRIVER', 'must be "expo" in production');
+      if (env.INTEGRITY_DRIVER !== 'store') {
+        fail(
+          'INTEGRITY_DRIVER',
+          'must be "store" in production (the "dev" driver passes every device)',
+        );
+      }
+    }
+    if (env.ADMIN_TOKENS && !env.ADMIN_DATABASE_URL) {
+      fail(
+        'ADMIN_DATABASE_URL',
+        'is required when ADMIN_TOKENS is set (the moderation API has its own database role)',
+      );
     }
     if (env.SMS_DRIVER === 'real' && !hasTermii(env) && !hasTwilio(env)) {
       fail(

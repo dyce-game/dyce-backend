@@ -11,6 +11,7 @@ import {
 } from '@dyce/shared';
 import { AuthGuard, CurrentUser, type AuthContext } from '../auth/auth.guard.ts';
 import { ZodPipe } from '../common/zod.pipe.ts';
+import { PoolEntry, PoolEntryGuard } from '../integrity/pool-entry.guard.ts';
 import { MatchesService } from './matches.service.ts';
 
 const idPipe = new ZodPipe(matchIdParamSchema);
@@ -42,6 +43,8 @@ export class MatchesController {
   @Post()
   @HttpCode(200)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @PoolEntry('body')
+  @UseGuards(PoolEntryGuard)
   create(
     @CurrentUser() user: AuthContext,
     @Body(new ZodPipe(createMatchSchema)) body: CreateMatchRequest,
@@ -56,6 +59,9 @@ export class MatchesController {
 
   @Post(':id/accept')
   @HttpCode(200)
+  @Throttle({ default: { limit: 30, ttl: 60_000 } })
+  @PoolEntry('match')
+  @UseGuards(PoolEntryGuard)
   accept(@CurrentUser() user: AuthContext, @Param('id', idPipe) id: string) {
     return this.matches.accept(user.userId, id);
   }
@@ -69,6 +75,9 @@ export class MatchesController {
   /** The invitee suggests a smaller stake (0 = play free), once: `{ stakeKobo }`. */
   @Post(':id/counter')
   @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  @PoolEntry('match')
+  @UseGuards(PoolEntryGuard)
   counter(
     @CurrentUser() user: AuthContext,
     @Param('id', idPipe) id: string,
@@ -82,6 +91,14 @@ export class MatchesController {
   @HttpCode(200)
   cancel(@CurrentUser() user: AuthContext, @Param('id', idPipe) id: string) {
     return this.matches.cancel(user.userId, id);
+  }
+
+  /** Give up a running 1v1 match (the game menu's "Resign"): the other player wins. */
+  @Post(':id/resign')
+  @HttpCode(200)
+  @Throttle({ default: { limit: 20, ttl: 60_000 } })
+  resign(@CurrentUser() user: AuthContext, @Param('id', idPipe) id: string) {
+    return this.matches.resign(user.userId, id);
   }
 
   /** One move: `{ expectedVersion, action }`. Returns your view of the match after it. */

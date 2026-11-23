@@ -9,14 +9,16 @@ import {
   type MatchMode,
   type MatchPlayerResult,
   type SpaceConnection,
+  type SpaceOptions,
   type SpacePayoutScheme,
   type SpaceStartRule,
   type SpaceStatus,
+  type SpaceExit,
   type SpaceView,
   type SpaceVisibility,
   type SpacesResponse,
 } from '@dyce/shared';
-import { liveGame } from '@dyce/games';
+import { liveGame, type LiveGame } from '@dyce/games';
 import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
 import type { Publisher } from '../chat/messages.service.ts';
@@ -47,6 +49,8 @@ type SpaceRow = {
   max_seats: number;
   visibility: SpaceVisibility;
   start_rule: SpaceStartRule;
+  options: SpaceOptions;
+  quick_match: boolean;
   status: SpaceStatus;
   created_at: Date;
 };
@@ -65,7 +69,8 @@ type MemberRow = {
 };
 
 const SPACE_COLUMNS = `s.id, s.code, s.name, s.host_id, s.game_slug, g.name AS game_name, g.min_players, s.mode,
-  s.seat_fee_kobo, s.payout_scheme, s.max_seats, s.visibility, s.start_rule, s.status, s.created_at`;
+  s.seat_fee_kobo, s.payout_scheme, s.max_seats, s.visibility, s.start_rule, s.options, s.quick_match, s.status,
+  s.created_at`;
 
 /** How long a finished space stays in "Your spaces" so people can open the result. */
 const ENDED_VISIBLE_HOURS = 24;
@@ -89,6 +94,8 @@ export class SpacesService {
     private readonly publisher: Publisher,
     private readonly rooms: GameRooms,
     private readonly clock: Clock = () => new Date(),
+    /** The live game registry. Tests swap in games with short timers. */
+    private readonly games: (slug: string) => LiveGame | null = liveGame,
   ) {}
 
   // ---- reading --------------------------------------------------------------------------------
@@ -99,7 +106,8 @@ export class SpacesService {
     const r = await this.pool.query<{ id: string }>(
       `SELECT s.id FROM spaces s JOIN space_members sm ON sm.space_id = s.id
         WHERE sm.user_id = $1 AND sm.left_at IS NULL
-          AND (s.status IN ('waiting', 'live') OR (s.status = 'ended' AND s.ended_at >= $2))
+          AND (s.status = 'live' OR (s.status = 'waiting' AND NOT s.quick_match)
+               OR (s.status = 'ended' AND s.ended_at >= $2))
         ORDER BY s.created_at DESC LIMIT 30`,
       [userId, since],
     );
@@ -114,8 +122,60 @@ export class SpacesService {
       `SELECT 1 FROM space_members WHERE space_id = $1 AND user_id = $2 AND left_at IS NULL`,
       [spaceId, userId],
     );
-    if (member.rowCount === 0) throw new AuthError('space_not_found');
+    if (member.rowCount === 0) {
+      const gone = await this.exitView(spaceId, userId);
+      if (gone) return gone;
+      throw new AuthError('space_not_found');
+    }
     return this.view(this.pool, spaceId, userId);
+  }
+
+  /**
+   * A space you used to sit in, told as why you are out (the Space edge-state screens, ADR-037): the host closed it
+   * or it timed out, you were removed, or you left. Nobody else can read it (`space_not_found` stays the answer for
+   * a stranger), and what the people still inside are doing is not part of it (no members, no match).
+   */
+  private async exitView(spaceId: string, userId: string): Promise<SpaceView | null> {
+    const r = await this.pool.query<{
+      removed: boolean;
+      space_status: string;
+      mode: MatchMode;
+      seat_fee_kobo: string;
+      match_status: string | null;
+      host_name: string | null;
+    }>(
+      `SELECT sm.removed, s.status AS space_status, s.mode, s.seat_fee_kobo,
+              (SELECT m.status FROM matches m WHERE m.space_id = s.id ORDER BY m.created_at DESC LIMIT 1) AS match_status,
+              coalesce(nullif(h.display_name, ''), h.username) AS host_name
+         FROM space_members sm
+         JOIN spaces s ON s.id = sm.space_id
+         LEFT JOIN profiles h ON h.id = s.host_id
+        WHERE sm.space_id = $1 AND sm.user_id = $2`,
+      [spaceId, userId],
+    );
+    const x = r.rows[0];
+    if (!x) return null;
+    const reason: SpaceExit['reason'] = x.removed
+      ? 'removed'
+      : x.space_status === 'closed'
+        ? x.match_status === 'expired'
+          ? 'expired'
+          : 'host_closed'
+        : 'left';
+    const fee = Number(x.seat_fee_kobo);
+    const gaveBack = x.removed || x.space_status === 'closed' || x.space_status === 'waiting';
+    const base = await this.view(this.pool, spaceId, userId);
+    return {
+      ...base,
+      members: [],
+      matchId: null,
+      potKobo: 0,
+      exit: {
+        reason,
+        hostName: x.host_name,
+        refundedKobo: x.mode === 'pool' && gaveBack ? fee : 0,
+      },
+    };
   }
 
   /** "Space found": what a code leads to, before sitting down. Applies the same entry rules as `join`. */
@@ -144,7 +204,7 @@ export class SpacesService {
   /** Opens a space and seats its host. Idempotent on `input.id`. */
   async create(userId: string, input: CreateSpaceRequest): Promise<SpaceView> {
     const mode = input.mode ?? 'free';
-    const live = liveGame(input.gameSlug);
+    const live = this.games(input.gameSlug);
     const game = await this.pool.query<{
       enabled: boolean;
       sync: string;
@@ -161,6 +221,8 @@ export class SpacesService {
     if (input.maxSeats < minSeats || input.maxSeats > maxSeats) {
       throw new AuthError('invalid_seats', { minSeats, maxSeats });
     }
+    const options: SpaceOptions = input.options ?? {};
+    if (!live.optionsValid(options)) throw new AuthError('invalid_options');
     let fee = 0;
     let scheme: SpacePayoutScheme = 'winner_all';
     if (mode === 'pool') {
@@ -169,6 +231,8 @@ export class SpacesService {
       await this.assertFeeInRange(this.pool, fee);
       scheme = input.payoutScheme ?? 'winner_all';
       if (scheme === 'p50_30_20' && input.maxSeats < 3) throw new AuthError('invalid_payout');
+      // Side games (Imposter, Werewolf) pay the winning side equally: no 2nd or 3rd place money.
+      if (!live.payoutSchemes.includes(scheme)) throw new AuthError('invalid_payout');
     }
 
     const created = await withTx(this.pool, async (c) => {
@@ -197,8 +261,8 @@ export class SpacesService {
         const candidate = newCode();
         const ins = await c.query(
           `INSERT INTO spaces (id, code, name, host_id, game_slug, mode, seat_fee_kobo, payout_scheme,
-                               max_seats, visibility, start_rule, status, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'waiting', $12)
+                               max_seats, visibility, start_rule, options, status, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $13::jsonb, 'waiting', $12)
            ON CONFLICT (code) DO NOTHING`,
           [
             input.id,
@@ -213,6 +277,7 @@ export class SpacesService {
             input.visibility ?? 'friends',
             input.startRule ?? 'host',
             now,
+            JSON.stringify(options),
           ],
         );
         if (ins.rowCount === 1) code = candidate;
@@ -265,7 +330,12 @@ export class SpacesService {
         [row.id],
       );
       if (members.rowCount !== null && members.rowCount >= row.max_seats) {
-        throw new AuthError('space_full');
+        throw new AuthError('space_full', {
+          name: row.name,
+          gameName: row.game_name,
+          gameSlug: row.game_slug,
+          seats: row.max_seats,
+        });
       }
       const taken = new Set(members.rows.map((m) => m.seat));
       let seat = 1;
@@ -379,6 +449,88 @@ export class SpacesService {
     return n;
   }
 
+  // ---- quick match hooks (QuickMatchService) -------------------------------------------------------
+
+  /** Throws `spaces_limit` when the person already sits in as many open spaces as one person may. */
+  async assertCanSeat(c: pg.PoolClient, userId: string): Promise<void> {
+    const cap = await readConfigInt(c, 'spaces_open_per_user', 5);
+    const open = await c.query<{ n: string }>(
+      `SELECT count(*) AS n FROM space_members sm JOIN spaces s ON s.id = sm.space_id
+        WHERE sm.user_id = $1 AND sm.left_at IS NULL AND s.status IN ('waiting', 'live')`,
+      [userId],
+    );
+    if (Number(open.rows[0]?.n ?? 0) >= cap) throw new AuthError('spaces_limit');
+  }
+
+  /**
+   * Opens the two-seat space of a quick match inside the caller's transaction: a waiting space nobody can
+   * find by code, its match, and both seats (host first). It stakes nothing: the caller escrows Pool seat
+   * fees with `stake`, person by person, so it knows whose stake failed.
+   */
+  async openQuickSpace(
+    c: pg.PoolClient,
+    input: { gameSlug: string; mode: MatchMode; seatFeeKobo: number; players: [string, string] },
+  ): Promise<{ spaceId: string; matchId: string }> {
+    const now = this.clock();
+    const spaceId = randomUUID();
+    const matchId = randomUUID();
+    let code = '';
+    for (let attempt = 0; attempt < 12 && !code; attempt++) {
+      const candidate = newCode();
+      const ins = await c.query(
+        `INSERT INTO spaces (id, code, name, host_id, game_slug, mode, seat_fee_kobo, payout_scheme,
+                             max_seats, visibility, start_rule, quick_match, status, created_at)
+         VALUES ($1, $2, 'Quick match', $3, $4, $5, $6, 'winner_all', 2, 'invite', 'host', true, 'waiting', $7)
+         ON CONFLICT (code) DO NOTHING`,
+        [spaceId, candidate, input.players[0], input.gameSlug, input.mode, input.seatFeeKobo, now],
+      );
+      if (ins.rowCount === 1) code = candidate;
+    }
+    if (!code) throw new Error('could not allocate a space code');
+    await c.query(
+      `INSERT INTO matches (id, game_slug, mode, stake_kobo, payout_scheme, status, space_id, seed,
+                            created_by, created_at)
+       VALUES ($1, $2, $3, $4, 'winner_all', 'invited', $5, $6, $7, $8)`,
+      [
+        matchId,
+        input.gameSlug,
+        input.mode,
+        input.seatFeeKobo,
+        spaceId,
+        newSeed(),
+        input.players[0],
+        now,
+      ],
+    );
+    for (const [i, userId] of input.players.entries()) {
+      await c.query(
+        `INSERT INTO match_players (match_id, user_id, seat, accepted_at) VALUES ($1, $2, $3, $4)`,
+        [matchId, userId, i + 1, now],
+      );
+      await c.query(
+        `INSERT INTO space_members (space_id, user_id, seat, joined_at) VALUES ($1, $2, $3, $4)`,
+        [spaceId, userId, i + 1, now],
+      );
+    }
+    return { spaceId, matchId };
+  }
+
+  /** Both accepted: start the game. Idempotent (a second call finds it already live). */
+  async startQuickSpace(spaceId: string): Promise<void> {
+    await this.startNow(spaceId);
+  }
+
+  /** The match fell through (declined, not accepted in time): close the waiting space and refund every stake. */
+  async closeQuickSpace(
+    c: pg.PoolClient,
+    spaceId: string,
+    reason: 'cancelled' | 'expired',
+  ): Promise<void> {
+    const { row, matchId } = await this.lockSpace(c, spaceId);
+    if (row.status !== 'waiting') return;
+    await this.closeLocked(c, row, matchId, reason);
+  }
+
   // ---- internals ------------------------------------------------------------------------------
 
   /** Locks the space and returns it with its current match. */
@@ -404,7 +556,9 @@ export class SpacesService {
       `SELECT ${SPACE_COLUMNS} FROM spaces s JOIN games g ON g.slug = s.game_slug WHERE s.code = $1`,
       [normalizeSpaceCode(code) ?? ''],
     );
-    return r.rows[0] ?? null;
+    const row = r.rows[0];
+    // A quick match is two people who were paired: nobody can look it up or sit down by its code.
+    return row && !row.quick_match ? row : null;
   }
 
   private async isMember(db: Db, spaceId: string, userId: string): Promise<boolean> {
@@ -452,13 +606,7 @@ export class SpacesService {
     }
   }
 
-  private async stake(
-    c: pg.PoolClient,
-    matchId: string,
-    userId: string,
-    fee: number,
-    joinN: number,
-  ) {
+  async stake(c: pg.PoolClient, matchId: string, userId: string, fee: number, joinN: number) {
     await this.money(() =>
       c.query(`SELECT stake_pool($1, $2, $3, $4)`, [
         matchId,
@@ -556,7 +704,7 @@ export class SpacesService {
       const { row, matchId } = await this.lockSpace(c, spaceId);
       if (row.status === 'live' || row.status === 'ended') return null; // already started
       if (row.status !== 'waiting') throw new AuthError('space_not_open');
-      const live = liveGame(row.game_slug);
+      const live = this.games(row.game_slug);
       if (!live) throw new AuthError('game_not_found');
 
       const seated = await c.query<{ user_id: string }>(
@@ -570,8 +718,15 @@ export class SpacesService {
       const seed = await c.query<{ seed: string }>(`SELECT seed FROM matches WHERE id = $1`, [
         matchId,
       ]);
-      const state = live.engine.init(players, BigInt(seed.rows[0]!.seed), live.cfg);
-      const turn = live.engine.currentPlayers(state)[0] ?? null;
+      const state = live.engine.init(
+        players,
+        BigInt(seed.rows[0]!.seed),
+        live.buildCfg(row.options ?? {}, players.length),
+      );
+      // Party rooms have no "whose turn": it would give roles away (Werewolf night), and several act at once.
+      const turn = live.kind === 'turns' ? (live.engine.currentPlayers(state)[0] ?? null) : null;
+      const deadline =
+        live.kind === 'turns' ? new Date(this.clock().getTime() + live.turnMs) : null;
       const now = this.clock();
       // Two people playing for a pot split 50/30/20 would get 62.5/37.5: use the 60/40 split instead.
       const scheme: SpacePayoutScheme =
@@ -580,7 +735,7 @@ export class SpacesService {
         `UPDATE matches SET status = 'active', state = $2::jsonb, state_version = 0, current_turn = $3,
                 turn_deadline = $4, payout_scheme = $5, live_meta = '{}'::jsonb
           WHERE id = $1`,
-        [matchId, JSON.stringify(state), turn, new Date(now.getTime() + live.turnMs), scheme],
+        [matchId, JSON.stringify(state), turn, deadline, scheme],
       );
       await c.query(`UPDATE spaces SET status = 'live', started_at = $2 WHERE id = $1`, [
         spaceId,
@@ -656,9 +811,11 @@ export class SpacesService {
       potKobo: row.mode === 'pool' ? fee * members.rows.length : 0,
       payoutScheme: row.payout_scheme,
       maxSeats: row.max_seats,
-      minSeats: Math.max(row.min_players, liveGame(row.game_slug)?.minPlayers ?? 2),
+      minSeats: Math.max(row.min_players, this.games(row.game_slug)?.minPlayers ?? 2),
       visibility: row.visibility,
       startRule: row.start_rule,
+      options: row.options ?? {},
+      quickMatch: row.quick_match,
       status: row.status,
       members: members.rows.map((m) => ({
         userId: m.user_id,

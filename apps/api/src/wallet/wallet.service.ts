@@ -22,7 +22,9 @@ import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
 import type { MessagesService } from '../chat/messages.service.ts';
 import { DyceError } from '../common/dyce-error.ts';
-import { readConfigInt } from '../db/config.ts';
+import { lagosDayStart, readConfigInt, secondsUntilLagosMidnight } from '../db/config.ts';
+import { withTx } from '../db/tx.ts';
+import { assertNotRestricted } from '../integrity/restrictions.ts';
 import type { LedgerRepo } from '../ledger/ledger.repo.ts';
 import { FRIENDSHIP_JOIN, NOT_BLOCKED, RELATIONSHIP_EXPR } from '../social/relationship.ts';
 
@@ -232,6 +234,8 @@ export class WalletService {
     userId: string,
     input: CreatePaymentRequestInput,
   ): Promise<PaymentRequestView> {
+    await assertNotRestricted(this.pool, userId);
+    await this.assertUnderRequestLimit(userId);
     if (input.targetUserId) await this.assertCanPay(userId, input.targetUserId);
     const inChat = input.delivery === 'chat' || Boolean(input.targetUserId);
     const req = await this.ledger.createPaymentRequest(
@@ -274,6 +278,7 @@ export class WalletService {
   async getRequest(userId: string, rawCode: string): Promise<PaymentRequestView> {
     const rows = await this.requestRows(userId, { code: rawCode });
     if (!rows[0]) throw new DyceError('request_not_found');
+    if (!rows[0].mine) await this.capStrangerScan(userId, rows[0].requester.id, rows[0].code);
     return rows[0];
   }
 
@@ -307,6 +312,8 @@ export class WalletService {
     );
     if (!req.rows[0]) throw new DyceError('request_not_found');
     const { id, requester, note } = req.rows[0];
+    // paying a code without opening it first does not get round the daily cap on strangers' codes
+    if (requester !== userId) await this.capStrangerScan(userId, requester, code);
 
     const r = await this.ledger.payPaymentRequest(
       code,
@@ -411,6 +418,66 @@ export class WalletService {
   }
 
   // ---- internals --------------------------------------------------------------------------------
+
+  /** SPEC section 13: a limit on money requests a day (`money_requests_per_day`, by the Lagos calendar). */
+  private async assertUnderRequestLimit(userId: string): Promise<void> {
+    const now = this.clock();
+    const perDay = await readConfigInt(this.pool, 'money_requests_per_day', 30);
+    const made = await this.pool.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM payment_requests WHERE requester = $1 AND created_at >= $2`,
+      [userId, lagosDayStart(now)],
+    );
+    if ((made.rows[0]?.n ?? 0) >= perDay) {
+      throw new AuthError('money_requests_rate_limited', {
+        retryAfterSeconds: secondsUntilLagosMidnight(now),
+      });
+    }
+  }
+
+  /**
+   * WALLET_AND_QR section 4: at most `stranger_scans_per_day` different codes a day from people who are not your
+   * friends or contacts (a code someone shared on purpose is a way to be sent a stranger, so it is counted). The
+   * same code again is free; a friend's or contact's code is never counted.
+   */
+  private async capStrangerScan(userId: string, requesterId: string, code: string): Promise<void> {
+    const known = await this.pool.query<{ ok: boolean }>(
+      `SELECT (EXISTS (SELECT 1 FROM friendships f
+                        WHERE f.user_low = LEAST($1::uuid, $2::uuid) AND f.user_high = GREATEST($1::uuid, $2::uuid)
+                          AND f.status = 'accepted')
+               OR EXISTS (SELECT 1 FROM contact_links
+                           WHERE (owner_id = $1 AND contact_user_id = $2) OR (owner_id = $2 AND contact_user_id = $1))
+              ) AS ok`,
+      [userId, requesterId],
+    );
+    if (known.rows[0]?.ok) return;
+    const now = this.clock();
+    const limit = await readConfigInt(this.pool, 'stranger_scans_per_day', 20);
+    const day = lagosDate(now);
+    const wanted = code.trim().toUpperCase();
+    // one person's checks are serialised, so two codes opened at once cannot both slip under the limit
+    await withTx(this.pool, async (c) => {
+      await c.query(`SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, [`scan:${userId}`]);
+      const seen = await c.query(
+        `SELECT 1 FROM stranger_scans WHERE user_id = $1 AND day = $2::date AND code = $3`,
+        [userId, day, wanted],
+      );
+      if (seen.rows.length > 0) return; // a code you already opened today stays open
+      const used = await c.query<{ n: number }>(
+        `SELECT count(*)::int AS n FROM stranger_scans WHERE user_id = $1 AND day = $2::date`,
+        [userId, day],
+      );
+      if ((used.rows[0]?.n ?? 0) >= limit) {
+        throw new AuthError('stranger_scans_rate_limited', {
+          retryAfterSeconds: secondsUntilLagosMidnight(now),
+        });
+      }
+      await c.query(`INSERT INTO stranger_scans (user_id, day, code) VALUES ($1, $2::date, $3)`, [
+        userId,
+        day,
+        wanted,
+      ]);
+    });
+  }
 
   /** Friends, contacts, or people whose chat both sides have accepted. */
   private async assertCanPay(userId: string, otherId: string): Promise<void> {

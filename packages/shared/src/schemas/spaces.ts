@@ -41,6 +41,11 @@ export type SpacePayoutScheme = z.infer<typeof spacePayoutSchemeSchema>;
 
 export const SPACE_NAME_MAX = 32;
 
+export const spaceOptionsSchema = z
+  .record(z.string().max(24), z.union([z.string().max(16), z.number(), z.boolean()]))
+  .refine((o) => Object.keys(o).length <= 6, 'too many options');
+export type SpaceOptions = z.infer<typeof spaceOptionsSchema>;
+
 /** The app picks the space id, so retrying a create after a bad connection can't make two spaces. */
 export const createSpaceSchema = z.object({
   id: z.uuid(),
@@ -54,7 +59,9 @@ export const createSpaceSchema = z.object({
   /** Pool only: what each seat pays in kobo. Ignored (0) in Free. */
   seatFeeKobo: z.number().int().min(0).max(1_000_000_000).default(0),
   payoutScheme: spacePayoutSchemeSchema.default('winner_all'),
-  maxSeats: z.number().int().min(2).max(8),
+  maxSeats: z.number().int().min(2).max(12),
+  /** Per-game options (Imposter clue rounds, Charades mode, ...). Checked against the game when the space is created. */
+  options: spaceOptionsSchema.optional(),
   visibility: spaceVisibilitySchema.default('friends'),
   startRule: spaceStartRuleSchema.default('host'),
 });
@@ -66,6 +73,16 @@ export type JoinSpaceRequest = z.input<typeof joinSpaceSchema>;
 export const removeSpaceMemberSchema = z.object({ userId: z.uuid() });
 
 export type SpaceStatus = 'waiting' | 'live' | 'ended' | 'closed';
+
+/**
+ * Why you are no longer in a space you were in (SpaceView.exit): the host closed it, it timed out unstarted,
+ * you were removed, or you left. `refundedKobo` is the seat fee that came back (0 in Free).
+ */
+export type SpaceExit = {
+  reason: 'host_closed' | 'expired' | 'removed' | 'left';
+  hostName: string | null;
+  refundedKobo: number;
+};
 
 export type SpaceMember = {
   userId: string;
@@ -101,6 +118,10 @@ export type SpaceView = {
   minSeats: number;
   visibility: SpaceVisibility;
   startRule: SpaceStartRule;
+  /** Per-game options chosen by the host (empty = defaults). */
+  options: SpaceOptions;
+  /** Opened by quick match: two people who were matched, not a room anyone can join. */
+  quickMatch: boolean;
   status: SpaceStatus;
   members: SpaceMember[];
   /** The current round's match (the room runs under this id). */
@@ -109,6 +130,8 @@ export type SpaceView = {
   seated: boolean;
   /** You are the host. */
   hosting: boolean;
+  /** Set only when you used to sit here and no longer do (then `members` and `matchId` are empty). */
+  exit?: SpaceExit | null;
   createdAt: string;
 };
 
@@ -127,14 +150,34 @@ export type SpaceConnection = {
 /** Close code the game server uses when a seat was taken over by a newer connection of the same person. */
 export const LIVE_CLOSE_REPLACED = 4010;
 
-/** The seat's own message to the room. The room validates everything with the engine. */
+/**
+ * The seat's own messages to the room (Colyseus message names). The room validates everything with the engine.
+ * - `move`: `expectedVersion` is required in turn games (Whot!, Crazy Cards) and ignored in party games,
+ *   where several people act at once; `action` is the engine's action (see docs/PARTY_ROOM_PROTOCOL.md).
+ * - `chat`: a line of text for the audience the game allows right now (party games only).
+ * - `sync`: ask for the current state again. `leave`: forfeit the seat.
+ */
 export type LiveClientMessage =
   | {
       type: 'move';
-      /** The state version the player was looking at (stale moves are refused). */ expectedVersion: number;
+      /** The state version the player was looking at (stale moves are refused in turn games). */
+      expectedVersion?: number;
       action: unknown;
     }
+  | { type: 'chat'; text: string }
+  | { type: 'sync' }
   | { type: 'leave' };
+
+/** What the room sends: `state` (LiveState), `error` (LiveError), `chat` (LiveChat) and `chat_history` (LiveChat[]). */
+export type LiveChat = {
+  id: number;
+  userId: string;
+  text: string;
+  /** Server epoch ms. */
+  at: number;
+};
+
+export const LIVE_CHAT_MAX_CHARS = 200;
 
 export type LiveSeat = {
   userId: string;
@@ -162,9 +205,16 @@ export type LiveState = {
   status: 'live' | 'finished';
   view: unknown;
   seats: LiveSeat[];
-  /** Whose clock is running, and when (server epoch ms) the room will move for them. */
+  /** Turn games: whose clock is running. Always null in party games (it would give roles away). */
   turnUserId: string | null;
+  /** Turn games: when the room moves for the player on turn. Party games: when the current phase ends (server epoch ms). */
   turnDeadlineAt: number | null;
+  /** `turns` (one player acts: Whot!, Crazy Cards) or `party` (phases and timers, many act at once). */
+  roomKind: 'turns' | 'party';
+  /** You may act right now (your turn, or the engine is waiting for something from you). */
+  canAct: boolean;
+  /** Party games: clocks are stopped until every seat has connected (or the join grace forfeits the absent). */
+  waiting: boolean;
   /** Server clock at send time, so the app can correct for a skewed device clock. */
   serverNow: number;
   /** Set once the match is finished and settled. */

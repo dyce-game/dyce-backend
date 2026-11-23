@@ -36,6 +36,7 @@ export interface MatchChat {
   playablePeer(
     userId: string,
     conversationId: string,
+    db?: Pick<pg.Pool, 'query'>,
   ): Promise<{ peerId: string; friends: boolean }>;
   postCard(
     conversationId: string,
@@ -133,8 +134,10 @@ export class MatchesService {
       max_players: number;
       categories: string[];
       supports_pool: boolean;
+      pool_min_stake_kobo: string | null;
     }>(
-      `SELECT slug, name, dimension, sync, min_players, max_players, categories, supports_pool
+      `SELECT slug, name, dimension, sync, min_players, max_players, categories, supports_pool,
+              pool_min_stake_kobo
          FROM games WHERE enabled ORDER BY name`,
     );
     const games: GameInfo[] = r.rows
@@ -148,6 +151,7 @@ export class MatchesService {
         maxPlayers: g.max_players,
         categories: g.categories,
         supportsPool: g.supports_pool,
+        poolMinKobo: g.pool_min_stake_kobo === null ? null : Number(g.pool_min_stake_kobo),
       }));
     return { games };
   }
@@ -250,14 +254,20 @@ export class MatchesService {
         return; // a retry
       }
 
-      const game = await c.query<{ enabled: boolean; supports_pool: boolean }>(
-        `SELECT enabled, supports_pool FROM games WHERE slug = $1`,
-        [input.gameSlug],
-      );
-      if (!game.rows[0]?.enabled) throw new AuthError('game_not_found');
+      const game = await c.query<{
+        enabled: boolean;
+        supports_pool: boolean;
+        pool_min_stake_kobo: string | null;
+      }>(`SELECT enabled, supports_pool, pool_min_stake_kobo FROM games WHERE slug = $1`, [
+        input.gameSlug,
+      ]);
+      // A game is playable when its row is enabled AND the registry has an engine for it.
+      if (!game.rows[0]?.enabled || this.entry(input.gameSlug) === null) {
+        throw new AuthError('game_not_found');
+      }
       if (mode === 'pool') {
         if (!game.rows[0].supports_pool) throw new AuthError('pool_not_supported');
-        await this.assertStakeInRange(c, stake);
+        await this.assertStakeInRange(c, stake, game.rows[0].pool_min_stake_kobo);
       }
 
       const limit = await readConfigInt(c, 'open_match_invites_per_chat', 5);
@@ -409,7 +419,13 @@ export class MatchesService {
       if (row.mode !== 'pool' || !row.allow_counter) throw new AuthError('counter_not_allowed');
       const stake = Number(row.stake_kobo);
       if (input.stakeKobo >= stake) throw new AuthError('invalid_stake');
-      if (input.stakeKobo > 0) await this.assertStakeInRange(c, input.stakeKobo);
+      if (input.stakeKobo > 0) {
+        const g = await c.query<{ pool_min_stake_kobo: string | null }>(
+          `SELECT pool_min_stake_kobo FROM games WHERE slug = $1`,
+          [row.game_slug],
+        );
+        await this.assertStakeInRange(c, input.stakeKobo, g.rows[0]?.pool_min_stake_kobo ?? null);
+      }
 
       // They must be able to honour their own offer.
       const me = await c.query<{ is_adult: boolean; pool_frozen: boolean; balance: string }>(
@@ -497,7 +513,7 @@ export class MatchesService {
       }
 
       // A block placed mid-match ends the interaction.
-      if (row.conversation_id) await this.chat.playablePeer(userId, row.conversation_id);
+      if (row.conversation_id) await this.chat.playablePeer(userId, row.conversation_id, c);
       if (row.status !== 'active') throw new AuthError('match_not_open');
 
       const state = row.state;
@@ -548,11 +564,49 @@ export class MatchesService {
         }
         // Free: marks the match finished. Pool: pays the escrow out by placement (a draw refunds both
         // stakes) in the same transaction, so a finished match and its payout can never disagree.
-        await this.money(() => c.query(`SELECT settle_match($1)`, [matchId]));
+        await this.money(() => c.query(`SELECT settle_or_hold($1)`, [matchId]));
       }
       return { changed: true };
     });
 
+    if (result.changed) await this.afterChange(matchId);
+    return this.get(userId, matchId);
+  }
+
+  /**
+   * Gives up a running 1v1 match from the game menu (SPEC section 9, ADR-037): the other player wins and a Pool pot
+   * goes to them through the same `settle_match` as any result. Anything else is refused: a match that has not
+   * started or is over (`match_not_open`), or one with more than two players, where resigning would need the
+   * engine to rank the rest (`resign_not_supported`). A retry after it worked changes nothing.
+   */
+  async resign(userId: string, matchId: string): Promise<MatchView> {
+    const result = await withTx(this.pool, async (c) => {
+      const { row, players } = await this.lock(c, matchId, userId);
+      const meta = await c.query<{ resigned_by: string | null }>(
+        `SELECT live_meta ->> 'resignedBy' AS resigned_by FROM matches WHERE id = $1`,
+        [matchId],
+      );
+      if (row.status === 'finished' && meta.rows[0]?.resigned_by === userId)
+        return { changed: false };
+      if (row.status !== 'active') throw new AuthError('match_not_open');
+      if (players.length !== 2) throw new AuthError('resign_not_supported');
+      for (const p of players) {
+        const mine = p.user_id === userId;
+        await c.query(
+          `UPDATE match_players SET placement = $3, result = $4::match_result
+            WHERE match_id = $1 AND user_id = $2`,
+          [matchId, p.user_id, mine ? 2 : 1, mine ? 'forfeit' : 'win'],
+        );
+      }
+      await c.query(
+        `UPDATE matches SET current_turn = NULL,
+                live_meta = live_meta || jsonb_build_object('resignedBy', $2::text)
+          WHERE id = $1`,
+        [matchId, userId],
+      );
+      await this.money(() => c.query(`SELECT settle_or_hold($1)`, [matchId]));
+      return { changed: true };
+    });
     if (result.changed) await this.afterChange(matchId);
     return this.get(userId, matchId);
   }
@@ -676,9 +730,19 @@ export class MatchesService {
     }
   }
 
-  /** The stake limits from config (docs/SPEC.md section 9). */
-  private async assertStakeInRange(c: Db, stake: number): Promise<void> {
-    const min = await readConfigInt(c, 'pool_min_stake_kobo', 10_000);
+  /**
+   * The stake limits from config (docs/SPEC.md section 9). A game may ask for more than the platform
+   * minimum (`games.pool_min_stake_kobo`, from docs/GAMES.md): the higher of the two applies.
+   */
+  private async assertStakeInRange(
+    c: Db,
+    stake: number,
+    gameMin: string | number | null = null,
+  ): Promise<void> {
+    const min = Math.max(
+      await readConfigInt(c, 'pool_min_stake_kobo', 10_000),
+      gameMin === null ? 0 : Number(gameMin),
+    );
     const max = await readConfigInt(c, 'pool_max_stake_kobo', 2_000_000);
     if (!Number.isInteger(stake) || stake < min || stake > max) {
       throw new AuthError('invalid_stake', { minStakeKobo: min, maxStakeKobo: max });
@@ -793,9 +857,10 @@ export class MatchesService {
 
   /** What `viewer` may see: the engine's `view()` for them, never the raw state. */
   private toView(row: MatchRow, players: PlayerRow[], viewer: string): MatchView {
-    const hasState = row.status === 'active' || row.status === 'finished';
+    // 'disputed' is a finished Pool match whose payout waits for a moderator (ADR-039): shown as a result.
+    const finished = row.status === 'finished' || row.status === 'disputed';
+    const hasState = row.status === 'active' || finished;
     const entry = hasState ? this.entry(row.game_slug) : null;
-    const finished = row.status === 'finished';
     return {
       id: row.id,
       gameSlug: row.game_slug,
@@ -839,7 +904,7 @@ export class MatchesService {
 }
 
 function cardPayload(row: MatchRow, players: PlayerRow[]): GameCardPayload {
-  const finished = row.status === 'finished';
+  const finished = row.status === 'finished' || row.status === 'disputed';
   return {
     matchId: row.id,
     gameSlug: row.game_slug,

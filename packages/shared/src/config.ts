@@ -52,6 +52,20 @@ export const appConfigSchema = z.object({
   integrity_required: z.boolean().default(false),
   /** Invitee has this long to respond before the stake is refunded. */
   match_invite_ttl_hours: z.number().int().default(24),
+  /** Quick match: how long a search runs before it gives up. */
+  quick_match_search_seconds: z.number().int().default(60),
+  /** Quick match: the level gap first allowed, widened to anyone after `quick_match_widen_seconds`. */
+  quick_match_level_gap: z.number().int().default(3),
+  quick_match_widen_seconds: z.number().int().default(15),
+  /** Quick match: time each person has to accept a found match (plus a short grace for the network). */
+  quick_match_accept_seconds: z.number().int().default(10),
+  quick_match_accept_grace_seconds: z.number().int().default(3),
+  /** Quick match tickets one person may open per rolling hour. */
+  quick_match_per_hour: z.number().int().default(30),
+  /** Declined or missed matches in 10 minutes before a person must wait. */
+  quick_match_miss_limit: z.number().int().default(3),
+  /** The same two people are not matched again within this many minutes. */
+  quick_match_rematch_minutes: z.number().int().default(10),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

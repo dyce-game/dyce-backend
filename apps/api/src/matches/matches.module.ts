@@ -7,6 +7,7 @@ import { ChatModule } from '../chat/chat.module.ts';
 import { RealtimeHub } from '../chat/hub.ts';
 import { MessagesService } from '../chat/messages.service.ts';
 import { PG_POOL } from '../db/db.module.ts';
+import { IntegrityModule } from '../integrity/integrity.module.ts';
 import { GamesController, MatchesController } from './matches.controller.ts';
 import { MatchesService } from './matches.service.ts';
 
@@ -22,7 +23,7 @@ export class MatchMaintenance {
 }
 
 @Module({
-  imports: [AuthModule, ChatModule],
+  imports: [AuthModule, ChatModule, IntegrityModule],
   controllers: [GamesController, MatchesController],
   providers: [
     {

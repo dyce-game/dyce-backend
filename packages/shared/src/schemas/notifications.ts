@@ -19,6 +19,9 @@ export const NOTIFICATION_KINDS = [
   'space_starting',
   'level_up',
   'badge_earned',
+  // trust and safety (ADR-039): what happened to a report you filed, and a notice from a moderator
+  'report_outcome',
+  'moderation_notice',
 ] as const;
 export type NotificationKind = (typeof NOTIFICATION_KINDS)[number];
 
@@ -50,6 +53,8 @@ export const PUSH_GROUP_OF: Record<NotificationKind, PushGroup | null> = {
   space_starting: 'spaces',
   level_up: null,
   badge_earned: null,
+  report_outcome: null,
+  moderation_notice: null,
 };
 
 /** The list's filter chips (design: Activity). */
@@ -370,5 +375,37 @@ export function describeNotification(
         route: '/profile/badges',
         cta: null,
       };
+    case 'report_outcome':
+      return {
+        title: 'We looked at your report',
+        body:
+          payload.outcome === 'actioned'
+            ? 'Thanks. We took action. We do not share what we did.'
+            : 'Thanks. We did not find a rule broken this time.',
+        route: '/notifications',
+        cta: null,
+      };
+    case 'moderation_notice': {
+      const notice = str(payload.kind);
+      return {
+        title:
+          notice === 'payout_review'
+            ? 'Your Pool payout is being checked'
+            : notice === 'mute'
+              ? 'Your messages are paused'
+              : 'A moderator sent you a warning',
+        body:
+          notice === 'payout_review'
+            ? 'A quick check before the pot is paid. Your stake is safe and nothing was taken.'
+            : notice === 'mute'
+              ? 'You cannot send messages or requests for a while. You can still play.'
+              : 'Please follow the community guidelines. Repeated breaks can limit your account.',
+        route:
+          notice === 'payout_review' && str(payload.matchId)
+            ? `/g/${str(payload.matchId)}/result`
+            : '/notifications',
+        cta: null,
+      };
+    }
   }
 }

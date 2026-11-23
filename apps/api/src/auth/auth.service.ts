@@ -201,14 +201,23 @@ export class AuthService {
         now,
       ]);
 
-      const u = await c.query<{ id: string; inserted: boolean; disabled_at: Date | null }>(
+      const u = await c.query<{
+        id: string;
+        inserted: boolean;
+        disabled_at: Date | null;
+        suspended: boolean;
+      }>(
         `INSERT INTO users (phone_hash, created_at) VALUES ($1, $2)
          ON CONFLICT (phone_hash) DO UPDATE SET phone_hash = users.phone_hash
-         RETURNING id, (xmax = 0) AS inserted, disabled_at`,
+         RETURNING id, (xmax = 0) AS inserted, disabled_at, coalesce(suspended_until > $2, false) AS suspended`,
         [hash, now],
       );
       const user = u.rows[0]!;
       if (user.disabled_at) return { ok: false, error: new AuthError('account_disabled') };
+      // A moderator suspended this account (ADR-039): no new session until the suspension ends or is lifted.
+      if (user.suspended) return { ok: false, error: new AuthError('account_suspended') };
+      // Signing back in during the grace period is the change of mind (ADR-037): the deletion is cancelled.
+      await c.query('SELECT cancel_account_deletion($1)', [user.id]);
 
       const familyId = randomUUID();
       const tokens = await this.startSession(c, user.id, familyId, now);
@@ -281,16 +290,19 @@ export class AuthService {
       }
       if (row.expires_at <= now) return { ok: false, error: new AuthError('invalid_refresh') };
 
-      const u = await c.query<{ disabled_at: Date | null }>(
-        'SELECT disabled_at FROM users WHERE id = $1',
-        [row.user_id],
+      const u = await c.query<{ disabled_at: Date | null; suspended: boolean }>(
+        'SELECT disabled_at, coalesce(suspended_until > $2, false) AS suspended FROM users WHERE id = $1',
+        [row.user_id, now],
       );
-      if (!u.rows[0] || u.rows[0].disabled_at) {
+      if (!u.rows[0] || u.rows[0].disabled_at || u.rows[0].suspended) {
         await c.query(
           'UPDATE refresh_tokens SET revoked_at = $2 WHERE family_id = $1 AND revoked_at IS NULL',
           [row.family_id, now],
         );
-        return { ok: false, error: new AuthError('account_disabled') };
+        return {
+          ok: false,
+          error: new AuthError(u.rows[0]?.suspended ? 'account_suspended' : 'account_disabled'),
+        };
       }
 
       const next = newRefreshToken();

@@ -2,6 +2,7 @@ import http from 'node:http';
 import { Server, matchMaker } from '@colyseus/core';
 import { WebSocketTransport } from '@colyseus/ws-transport';
 import type pg from 'pg';
+import type { LiveGame } from '@dyce/games';
 import { TokenVerifier } from './auth.ts';
 import { SIG_HEADER, TS_HEADER, verifyInternal } from './internal-sig.ts';
 import {
@@ -25,7 +26,11 @@ export type GameServerConfig = {
   store?: LiveMatchStore;
   /** How long a finished table stays open. */
   lingerMs?: number;
+  /** The live game registry; tests pass games with short timers. Defaults to `@dyce/games`. */
+  games?: (slug: string) => LiveGame | null;
   log?: (msg: string, extra?: unknown) => void;
+  /** False while the process is draining for shutdown: /health/ready answers 503 and no new rooms are started. */
+  isReady?: () => boolean;
 };
 
 export type GameServer = {
@@ -79,7 +84,20 @@ export function createGameServer(config: GameServerConfig): GameServer {
   async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const url = (req.url ?? '').split('?')[0];
     if (req.method === 'GET' && url === '/health') return respond(res, 200, { ok: true });
+    // Probes (docs/RUNBOOK.md): live = the process answers; ready = safe to send rooms here (database up, not draining).
+    if (req.method === 'GET' && url === '/health/live') return respond(res, 200, { status: 'ok' });
+    if (req.method === 'GET' && url === '/health/ready') {
+      if (config.isReady && !config.isReady()) return respond(res, 503, { status: 'draining' });
+      try {
+        await config.pool.query('SELECT 1');
+      } catch {
+        return respond(res, 503, { status: 'degraded', db: 'down' });
+      }
+      return respond(res, 200, { status: 'ok', db: 'up', release: process.env.RELEASE ?? null });
+    }
     if (req.method === 'POST' && url === '/internal/rooms') {
+      // Draining: refuse new rooms so the API retries and the next attempt lands on a healthy instance.
+      if (config.isReady && !config.isReady()) return respond(res, 503, { error: 'draining' });
       const body = await readBody(req);
       if (
         body === null ||
@@ -126,6 +144,7 @@ export function createGameServer(config: GameServerConfig): GameServer {
       scheduler,
       options,
       lingerMs: config.lingerMs ?? 45_000,
+      ...(config.games ? { games: config.games } : {}),
       log,
     }),
   );

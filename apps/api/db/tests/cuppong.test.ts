@@ -87,6 +87,7 @@ describe('catalogue', () => {
       maxPlayers: 2,
       categories: ['sports'],
       supportsPool: false,
+      poolMinKobo: 10_000,
     });
   });
 });

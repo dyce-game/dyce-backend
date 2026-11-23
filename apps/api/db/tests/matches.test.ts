@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import pg from 'pg';
 import { z } from 'zod';
 import type { GameCardPayload, MatchView, RealtimeEvent } from '@dyce/shared';
 import { MessagesService } from '../../src/chat/messages.service.ts';
@@ -564,4 +565,35 @@ describe('finishing', () => {
       [loser]: 'loss',
     });
   });
+});
+
+describe('many moves at once (BUG-0)', () => {
+  it('finishes more simultaneous moves than the pool has connections, instead of starving the pool', async () => {
+    // A pool of 4 with 12 matches moving at the same time: every move used to hold a connection and ask for
+    // a second one inside its transaction, so a busy API (20 of 20 connections) stopped answering for good.
+    const small = new pg.Pool({ connectionString: db.app.options.connectionString, max: 4 });
+    try {
+      const smallChat = new MessagesService(small, publisher, now);
+      const smallMatches = new MatchesService(small, publisher, smallChat, now, {
+        allowDevGames: true,
+        engines: ENGINES,
+      });
+      const games = [];
+      for (let i = 0; i < 12; i++) games.push(await started());
+      const results = await Promise.race([
+        Promise.all(
+          games.map((g) =>
+            smallMatches.submitMove(g.a.id, g.id, { expectedVersion: 0, action: add(1) }),
+          ),
+        ),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('moves did not finish: the pool is starved')), 20_000),
+        ),
+      ]);
+      expect(results).toHaveLength(12);
+      for (const r of results) expect(r.stateVersion).toBe(1);
+    } finally {
+      await small.end();
+    }
+  }, 40_000);
 });

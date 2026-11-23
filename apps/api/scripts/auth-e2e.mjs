@@ -326,6 +326,7 @@ try {
     ['tunde.c'],
   );
   assert.deepEqual(Object.keys(r.json.friends[0]).sort(), [
+    'avatar',
     'displayName',
     'id',
     'since',

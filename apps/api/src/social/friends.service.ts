@@ -10,6 +10,7 @@ import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
 import { lagosDayStart, readConfigInt } from '../db/config.ts';
 import { withTx } from '../db/tx.ts';
+import { assertNotRestricted } from '../integrity/restrictions.ts';
 import {
   FRIENDSHIP_JOIN,
   lockPair,
@@ -253,6 +254,7 @@ export class FriendsService {
 
     return withTx(this.pool, async (c) => {
       await lockPair(c, userId, targetId);
+      await assertNotRestricted(c, userId);
 
       const target = await c.query<{ request_policy: 'everyone' | 'fof' | 'nobody' }>(
         `SELECT p.request_policy FROM users u JOIN profiles p ON p.id = u.id

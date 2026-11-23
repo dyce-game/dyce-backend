@@ -80,6 +80,6 @@ describe("seeing other people's looks", () => {
     expect(list[0]?.avatar).toEqual({ v: 1, preset: 'dyce_av_077' });
 
     const conv = await messages.openDirect(me, them);
-    expect(conv.peer.avatar).toEqual({ v: 1, preset: 'dyce_av_077' });
+    expect(conv.peer?.avatar).toEqual({ v: 1, preset: 'dyce_av_077' });
   });
 });
