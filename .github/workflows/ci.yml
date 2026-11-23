@@ -5,14 +5,18 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   check:
-    name: Lint, typecheck, unit tests, determinism
+    name: Lint, typecheck, format, unit tests, determinism
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4 # version comes from "packageManager" in package.json
@@ -20,6 +24,12 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
+      # Turborepo's task cache: unchanged packages are not rebuilt or retested.
+      - uses: actions/cache@v4
+        with:
+          path: .turbo
+          key: turbo-${{ runner.os }}-${{ github.sha }}
+          restore-keys: turbo-${{ runner.os }}-
       - run: pnpm install --frozen-lockfile
       - run: pnpm format:check
       - run: pnpm lint
@@ -29,8 +39,9 @@ jobs:
       - run: pnpm test:determinism
 
   database:
-    name: Database tests (real PostgreSQL)
+    name: Database tests (real PostgreSQL, includes the ledger and the nightly money check)
     runs-on: ubuntu-latest
+    timeout-minutes: 25
     services:
       postgres:
         image: postgres:17
@@ -56,8 +67,9 @@ jobs:
       - run: pnpm test:db
 
   api-smoke:
-    name: API builds, boots and runs the HTTP journey
+    name: API builds, boots (Sentry off and on), shuts down gracefully, runs the HTTP journey
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
@@ -67,5 +79,102 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm -F @dyce/shared build && pnpm -F @dyce/games build && pnpm -F @dyce/api build
+      # Boots dist/main.js against a throwaway PostgreSQL twice (error reporting off, then on with a dummy DSN), checks
+      # /health, /health/live, /health/ready, the request id, JSON logs and SIGTERM -> drain -> exit 0; then the
+      # error-filter and redaction checks that Jest cannot load (Nest is ESM-only).
       - run: pnpm -F @dyce/api smoke
       - run: pnpm -F @dyce/api e2e
+
+  live-e2e:
+    name: Live rooms end to end (API + game server as real processes)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -F @dyce/shared build && pnpm -F @dyce/games build && pnpm -F @dyce/api build && pnpm -F @dyce/game-server build
+      - run: pnpm -F @dyce/game-server e2e
+
+  docker:
+    name: Images build and the whole stack comes up (docker compose)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      # Layer cache in the GitHub Actions cache: dependency layers are rebuilt only when the lockfile changes.
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/api/Dockerfile
+          tags: dyce-api:local
+          load: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/game-server/Dockerfile
+          tags: dyce-game-server:local
+          load: true
+          cache-from: type=gha,scope=game-server
+          cache-to: type=gha,scope=game-server,mode=max
+      # Postgres -> migrations (as the owner role) -> API and game server, exactly as docs/RUNBOOK.md deploys them.
+      # `--wait` returns when the containers' own health checks pass.
+      - run: docker compose up -d --wait --no-build
+      - name: Probes answer and the schema is current
+        run: |
+          curl -fsS http://localhost:3000/health/live
+          curl -fsS http://localhost:3000/health/ready | tee ready.json
+          grep -q '"db":"up"' ready.json
+          curl -fsS http://localhost:2567/health/ready
+      - name: 'Graceful shutdown: SIGTERM exits 0 inside the drain window'
+        run: |
+          docker compose stop -t 20 api game-server
+          for s in api game-server; do
+            code=$(docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq $s)")
+            echo "$s exit code: $code"
+            [ "$code" = "0" ] || { docker compose logs $s; exit 1; }
+          done
+      - if: failure()
+        run: docker compose logs --no-color
+      - if: always()
+        run: docker compose down -v
+
+  app-compat:
+    name: The Expo app still builds against this backend
+    # Runs only when the app repository is configured (repository variable APP_REPO = owner/name; secret
+    # APP_REPO_TOKEN if it is private). Without it the job is skipped, not failed.
+    if: ${{ vars.APP_REPO != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        working-directory: Dyce
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: dyce-backend
+      - uses: actions/checkout@v4
+        with:
+          repository: ${{ vars.APP_REPO }}
+          ref: ${{ vars.APP_REF || 'main' }}
+          path: Dyce
+          token: ${{ secrets.APP_REPO_TOKEN || github.token }}
+      - uses: pnpm/action-setup@v4
+        with:
+          package_json_file: Dyce/package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: Dyce/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      # @dyce/shared and @dyce/games are consumed as source: a contract change here is an app change too.
+      - run: pnpm typecheck
+      - run: pnpm test
