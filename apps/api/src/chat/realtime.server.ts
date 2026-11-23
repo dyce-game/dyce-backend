@@ -10,7 +10,7 @@ export const REALTIME_PATH = '/realtime';
 type Tokens = {
   verifyAccessWithExpiry(token: string): Promise<AccessClaims & { expiresAt: number }>;
 };
-type Typing = { typingTarget(userId: string, conversationId: string): Promise<string | null> };
+type Typing = { typingTargets(userId: string, conversationId: string): Promise<string[]> };
 
 export type RealtimeServerOptions = {
   /** How long a new socket has to send its `auth` frame. */
@@ -131,9 +131,9 @@ export class RealtimeServer {
           burst = burst.filter((x) => t - x < this.opts.typingWindowMs);
           if (burst.length >= this.opts.typingBurst) return; // quietly drop the excess
           burst.push(t);
-          const target = await this.typing.typingTarget(userId, frame.conversationId);
-          if (target) {
-            this.hub.publish([target], {
+          const targets = await this.typing.typingTargets(userId, frame.conversationId);
+          if (targets.length > 0) {
+            this.hub.publish(targets, {
               type: 'typing',
               conversationId: frame.conversationId,
               userId,

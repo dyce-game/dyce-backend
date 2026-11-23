@@ -631,7 +631,7 @@ describe('history', () => {
     });
   });
 
-  it('does not return deleted messages', async () => {
+  it('returns a message deleted for everyone as an empty tombstone, not its text', async () => {
     const a = await person();
     const b = await person();
     await befriend(a, b);
@@ -639,8 +639,12 @@ describe('history', () => {
     const gone = await say(a, conv, 'oops');
     await say(a, conv, 'keep');
     await db.admin.query(`UPDATE messages SET deleted_at = now() WHERE id = $1`, [gone.id]);
-    expect((await chat.messages(b.id, conv)).messages.map((m) => m.body)).toEqual(['keep']);
+    const history = (await chat.messages(b.id, conv)).messages;
+    expect(history.map((m) => m.body)).toEqual(['keep', '']);
+    expect(history.map((m) => m.deleted)).toEqual([undefined, true]);
     expect((await chat.list(b.id)).conversations[0]!.lastMessage!.body).toBe('keep');
+    // and it is not an unread message
+    expect((await chat.list(b.id)).conversations[0]!.unread).toBe(1);
   });
 });
 
@@ -660,8 +664,8 @@ describe('the list', () => {
     await say(me, stranger, 'newest');
 
     const all = await chat.list(me.id);
-    expect(all.conversations.map((c) => c.peer.id)).toEqual([accepted.id, recent.id, old.id]);
-    expect((await chat.list(me.id, 'friends')).conversations.map((c) => c.peer.id)).toEqual([
+    expect(all.conversations.map((c) => c.peer?.id)).toEqual([accepted.id, recent.id, old.id]);
+    expect((await chat.list(me.id, 'friends')).conversations.map((c) => c.peer?.id)).toEqual([
       recent.id,
       old.id,
     ]);
@@ -692,10 +696,10 @@ describe('typing signals', () => {
     const a = await person();
     const b = await person();
     await befriend(a, b);
-    expect(await chat.typingTarget(a.id, await open(a, b))).toBe(b.id);
+    expect(await chat.typingTargets(a.id, await open(a, b))).toEqual([b.id]);
     const s = await person();
     const r = await person();
-    expect(await chat.typingTarget(s.id, await open(s, r))).toBe(r.id);
+    expect(await chat.typingTargets(s.id, await open(s, r))).toEqual([r.id]);
   });
 
   it('go nowhere for outsiders, blocked people, or someone who ignored the request', async () => {
@@ -704,18 +708,18 @@ describe('typing signals', () => {
     const out = await person();
     await befriend(a, b);
     const conv = await open(a, b);
-    expect(await chat.typingTarget(out.id, conv)).toBeNull();
-    expect(await chat.typingTarget(a.id, randomUUID())).toBeNull();
+    expect(await chat.typingTargets(out.id, conv)).toEqual([]);
+    expect(await chat.typingTargets(a.id, randomUUID())).toEqual([]);
 
     const s = await person();
     const r = await person();
     const c2 = await open(s, r);
     await say(s, c2);
     await chat.decline(r.id, c2);
-    expect(await chat.typingTarget(s.id, c2)).toBeNull();
+    expect(await chat.typingTargets(s.id, c2)).toEqual([]);
 
     await block(b, a);
-    expect(await chat.typingTarget(a.id, conv)).toBeNull();
+    expect(await chat.typingTargets(a.id, conv)).toEqual([]);
   });
 });
 

@@ -103,9 +103,9 @@ describe('RealtimeServer', () => {
       },
       hub,
       {
-        async typingTarget(user, conv) {
+        async typingTargets(user, conv) {
           typingChecks.push([user, conv]);
-          return user === A && conv === CONV ? B : null;
+          return user === A && conv === CONV ? [B] : [];
         },
       },
       { now: () => nowMs, ...opts },
@@ -226,7 +226,7 @@ describe('RealtimeServer', () => {
     await start();
     const b = connect();
     await b.opened;
-    b.ws.send(auth('token-for-b-xxxx')); // typingTarget() returns null for B
+    b.ws.send(auth('token-for-b-xxxx')); // typingTargets() returns nothing for B
     await b.next(1);
     b.ws.send(JSON.stringify({ type: 'typing', conversationId: CONV, typing: true }));
     await new Promise((r) => setTimeout(r, 100));
