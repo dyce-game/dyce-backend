@@ -19,5 +19,6 @@ export * from './schemas/social.ts';
 export * from './schemas/notifications.ts';
 export * from './schemas/groups.ts';
 export * from './schemas/account.ts';
+export * from './schemas/streak.ts';
 export * from './bots.ts';
 export * from './redact.ts';

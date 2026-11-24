@@ -25,6 +25,8 @@ import {
   type GameEngine,
   type WordTilesWordSet,
 } from '@dyce/games';
+import type { GameOption, MatchOptions } from '@dyce/shared';
+import { AuthError } from '../auth/auth-error.ts';
 
 /** Engines are generic in their state and action; the match service only handles them as JSON. */
 export type AnyEngine = GameEngine<unknown, unknown, unknown>;
@@ -49,7 +51,69 @@ export type EngineEntry = {
    * move may be changed (e.g. a late Word Hunt submit loses its words) but never refused here.
    */
   screenAction?: (ctx: ScreenContext) => unknown;
+  /**
+   * Variants a sender can pick when the game is sent (ADR-041). Each option's `key` is the engine `cfg` key it
+   * sets; only the listed values are accepted, and the result must still initialise the engine.
+   */
+  options?: GameOption[];
 };
+
+/** What a game's cfg and variant label are for the options a sender chose. */
+export type ResolvedOptions = {
+  /** Only the options that were given and are valid, as stored on the match. */
+  options: MatchOptions;
+  /** The entry's cfg with the options laid over it. */
+  cfg: unknown;
+  /** "Mancala (Kalah)" for a non-default variant, else null. */
+  variantLabel: string | null;
+  /** False when a chosen variant is not offered for stakes (Darts: Around the clock). */
+  poolOk: boolean;
+};
+
+/**
+ * Checks the options a sender asked for against what the game offers and lays them over its cfg. Anything the
+ * game does not offer, a value that is not one of its choices, or a result the engine cannot start with is
+ * `invalid_options`. An option equal to its default is not stored, so "no option" and "the default" are the same
+ * match (and a retried create with either spelling is the same create).
+ */
+export function resolveOptions(
+  entry: EngineEntry,
+  input: MatchOptions | undefined,
+): ResolvedOptions {
+  const spec = entry.options ?? [];
+  const given = input ?? {};
+  const options: MatchOptions = {};
+  let label: string | null = null;
+  let poolOk = true;
+  for (const key of Object.keys(given)) {
+    const opt = spec.find((o) => o.key === key);
+    const choice = opt?.choices.find((c) => c.value === given[key]);
+    if (!opt || !choice) throw new AuthError('invalid_options');
+    if (choice.value === opt.default) continue;
+    options[key] = choice.value;
+    label = choice.label;
+    if (!choice.pool) poolOk = false;
+  }
+  const cfg = { ...(entry.cfg as Record<string, unknown>), ...options };
+  if (Object.keys(options).length > 0) {
+    try {
+      entry.engine.init(['a', 'b'], 1n, cfg);
+    } catch {
+      throw new AuthError('invalid_options');
+    }
+  }
+  return { options, cfg, variantLabel: label, poolOk };
+}
+
+/** The label of the variant stored on a match, for cards (null for the default rules). */
+export function variantLabelOf(entry: EngineEntry | null, options: MatchOptions): string | null {
+  if (!entry) return null;
+  for (const opt of entry.options ?? []) {
+    const choice = opt.choices.find((c) => c.value === options[opt.key]);
+    if (choice && choice.value !== opt.default) return choice.label;
+  }
+  return null;
+}
 
 /** Slack on top of the round for network time, as in the engine's `timers.turnMs`. */
 export const WORD_HUNT_GRACE_MS = 10_000;
@@ -141,14 +205,66 @@ export const ENGINES: Record<string, EngineEntry> = {
   tanks: { engine: asEngine(tanksEngine), cfg: { maxShots: 12 } },
   chess: { engine: asEngine(chessEngine), cfg: {} },
   checkers: { engine: asEngine(checkersEngine), cfg: {} },
-  // Ayo only for now; the Kalah mode switch needs a per-match option (docs/BACKLOG.md).
-  ayo: { engine: asEngine(ayoEngine), cfg: { variant: 'ayo' } },
+  // Ayo Olopon by default; "Mancala" (Kalah) is a variant of the same board (ADR-041).
+  ayo: {
+    engine: asEngine(ayoEngine),
+    cfg: { variant: 'ayo' },
+    options: [
+      {
+        key: 'variant',
+        label: 'Rules',
+        default: 'ayo',
+        choices: [
+          { value: 'ayo', label: 'Ayo', note: 'Ayo Olopon, the Nigerian rules', pool: true },
+          { value: 'kalah', label: 'Mancala (Kalah)', note: 'Stores and extra turns', pool: true },
+        ],
+      },
+    ],
+  },
   'dots-and-boxes': { engine: asEngine(dotsAndBoxesEngine), cfg: { dots: 5 } },
   // Async Ludo is two players; the 3-4 player live room is a backlog item (needs its own slug).
   ludo: { engine: asEngine(ludoEngine), cfg: { tokens: 4 } },
-  'sea-battle': { engine: asEngine(seaBattleEngine), cfg: { salvo: false } },
+  'sea-battle': {
+    engine: asEngine(seaBattleEngine),
+    cfg: { salvo: false },
+    options: [
+      {
+        key: 'salvo',
+        label: 'Rules',
+        default: false,
+        choices: [
+          { value: false, label: 'Classic', note: 'One shot a turn', pool: true },
+          { value: true, label: 'Salvo', note: 'One shot per ship you still have', pool: true },
+        ],
+      },
+    ],
+  },
   'eight-ball': { engine: asEngine(eightBallEngine), cfg: { maxShots: 120 } },
-  darts: { engine: asEngine(dartsEngine), cfg: { variant: '501', maxRounds: 20, wobble: 60 } },
+  darts: {
+    engine: asEngine(dartsEngine),
+    cfg: { variant: '501', maxRounds: 20, wobble: 60 },
+    options: [
+      {
+        key: 'variant',
+        label: 'Rules',
+        default: '501',
+        choices: [
+          {
+            value: '501',
+            label: '501',
+            note: 'Race down from 501, finish on a double',
+            pool: true,
+          },
+          {
+            value: 'clock',
+            label: 'Around the clock',
+            note: 'Hit 1 to 20, then the bull. Free only',
+            pool: false,
+          },
+        ],
+      },
+    ],
+  },
   basketball: { engine: asEngine(basketballEngine), cfg: { racks: 5, shotsPerRack: 5 } },
   archery: { engine: asEngine(archeryEngine), cfg: { ends: 3, arrowsPerEnd: 3 } },
 };

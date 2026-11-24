@@ -19,6 +19,8 @@ export const NOTIFICATION_KINDS = [
   'space_starting',
   'level_up',
   'badge_earned',
+  // a streak ended and a saver is on offer (ADR-042)
+  'streak_lost',
   // trust and safety (ADR-039): what happened to a report you filed, and a notice from a moderator
   'report_outcome',
   'moderation_notice',
@@ -53,6 +55,7 @@ export const PUSH_GROUP_OF: Record<NotificationKind, PushGroup | null> = {
   space_starting: 'spaces',
   level_up: null,
   badge_earned: null,
+  streak_lost: null,
   report_outcome: null,
   moderation_notice: null,
 };
@@ -366,6 +369,18 @@ export function describeNotification(
         body: 'You reached a new level.',
         route: '/profile',
         cta: null,
+      };
+    }
+    case 'streak_lost': {
+      const length = num(payload.length);
+      return {
+        title: length ? `Your ${length} day streak ended` : 'Your streak ended',
+        body:
+          payload.saver === true
+            ? 'Win a free game in the next 24 hours and it comes back.'
+            : 'Win a game today to start a new one.',
+        route: '/streak',
+        cta: payload.saver === true ? 'Save it' : null,
       };
     }
     case 'badge_earned':

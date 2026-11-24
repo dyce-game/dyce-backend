@@ -17,6 +17,7 @@ import { LedgerModule } from './ledger/ledger.module.ts';
 import { MatchesModule } from './matches/matches.module.ts';
 import { OpsModule } from './ops/ops.module.ts';
 import { NotificationsModule } from './notifications/notifications.module.ts';
+import { ProgressModule } from './progress/progress.module.ts';
 import { SafetyModule } from './safety/safety.module.ts';
 import { SocialModule } from './social/social.module.ts';
 import { QuickMatchModule } from './quickmatch/quickmatch.module.ts';
@@ -44,6 +45,7 @@ import { WalletModule } from './wallet/wallet.module.ts';
     SpacesModule,
     QuickMatchModule,
     DiscoveryModule,
+    ProgressModule,
     NotificationsModule,
     AccountModule,
   ],

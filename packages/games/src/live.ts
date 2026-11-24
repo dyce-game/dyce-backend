@@ -6,6 +6,7 @@ import {
   type CrazyCardsAction,
   type CrazyCardsState,
 } from './crazycards/engine.ts';
+import { ludoAutoAction, ludoEngine, type LudoState } from './ludo/engine.ts';
 import { imposterEngine } from './imposter/engine.ts';
 import { werewolfEngine } from './werewolf/engine.ts';
 import { charadesEngine } from './charades/engine.ts';
@@ -26,7 +27,7 @@ import {
  * list. Pure data + functions: no I/O, no clock.
  *
  * Two kinds of room (ADR-025):
- *  - `turns` (Whot!, Crazy Cards): one player acts at a time, the room keeps a turn clock and plays for a
+ *  - `turns` (Whot!, Crazy Cards, the Ludo room): one player acts at a time, the room keeps a turn clock and plays for a
  *    seat that runs out of time or left (`autoAction`).
  *  - `party` (Imposter, Werewolf, Charades, Doodle Guess): phases with timers, several players acting at
  *    once. The room sends the engine `tick` actions as real time passes; nobody is auto-played, a seat
@@ -127,6 +128,23 @@ export const LIVE_GAMES: Record<string, LiveGame> = {
     buildCfg: () => ({}),
     autoAction: (state, by) =>
       crazyCardsAutoAction(state as CrazyCardsState, by) satisfies CrazyCardsAction,
+  },
+  // Ludo for 3 or 4 at a table (the 2-player game is the async `ludo` match in a chat). One engine, one extra slug,
+  // because `games.sync` is per slug. A turn is two actions (roll, then move a token), each on the 25 s clock; a seat
+  // that runs out of time or leaves is played with `ludoAutoAction`. The first home wins and the rest rank by progress.
+  'ludo-room': {
+    kind: 'turns',
+    slug: 'ludo-room',
+    engine: asEngine(ludoEngine),
+    cfg: { tokens: 4 },
+    minPlayers: 3,
+    maxPlayers: 4,
+    turnMs: 25_000,
+    payoutSchemes: ALL_SCHEMES,
+    quickMatch: false,
+    optionsValid: noOptions,
+    buildCfg: () => ({ tokens: 4 }),
+    autoAction: (state, by) => ludoAutoAction(state as LudoState, by),
   },
   imposter: {
     kind: 'party',

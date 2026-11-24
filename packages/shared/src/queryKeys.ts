@@ -31,6 +31,7 @@ export const queryKeys = {
   notificationUnread: ['notifications', 'unread'] as const,
   notificationPrefs: ['notifications', 'prefs'] as const,
   badges: ['badges'] as const,
+  streak: ['streak'] as const,
   peopleSearch: (q: string) => ['search', 'people', q] as const,
   appConfig: ['app-config'] as const,
   dispute: (matchId: string) => ['dispute', matchId] as const,

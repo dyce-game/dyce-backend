@@ -17,9 +17,17 @@ import { doodleGuessEngine } from './doodleguess/engine.ts';
 const ids = (n: number): string[] => Array.from({ length: n }, (_, i) => `p${i + 1}`);
 
 describe('live registry', () => {
-  it('lists the two card games and the four party games', () => {
+  it('lists the two card games, the Ludo room and the four party games', () => {
     expect(Object.keys(LIVE_GAMES).sort()).toEqual(
-      ['charades', 'crazy-cards', 'doodle-guess', 'imposter', 'whot', 'werewolf'].sort(),
+      [
+        'charades',
+        'crazy-cards',
+        'doodle-guess',
+        'imposter',
+        'ludo-room',
+        'whot',
+        'werewolf',
+      ].sort(),
     );
     expect(liveGame('nope')).toBeNull();
   });
@@ -67,6 +75,36 @@ describe('live registry', () => {
     expect(ch.optionsValid({ mode: 'mime' })).toBe(false);
     expect(LIVE_GAMES.whot!.optionsValid({ a: 1 })).toBe(false);
     expect(LIVE_GAMES.werewolf!.optionsValid({})).toBe(true);
+  });
+});
+
+describe('the Ludo room', () => {
+  const room = LIVE_GAMES['ludo-room']!;
+
+  it('is a turn room for 3 or 4 seats that pays by progress and cannot be quick matched', () => {
+    expect(room.kind).toBe('turns');
+    expect([room.minPlayers, room.maxPlayers]).toEqual([3, 4]);
+    expect(room.quickMatch).toBe(false);
+    expect(room.payoutSchemes).toEqual(['winner_all', 'p60_40', 'p50_30_20']);
+    expect(room.optionsValid({})).toBe(true);
+    expect(room.optionsValid({ tokens: 1 })).toBe(false);
+  });
+
+  it.each([3, 4])('plays a whole game at %i seats with only its own auto action', (n) => {
+    if (room.kind !== 'turns') throw new Error('turns room');
+    let s = room.engine.init(ids(n), 7n, room.buildCfg({}, n));
+    let moves = 0;
+    while (!room.engine.isTerminal(s) && moves < 6000) {
+      const by = room.engine.currentPlayers(s)[0]!;
+      const a = room.autoAction(s, by);
+      expect(room.engine.validate(s, by, a)).toEqual({ ok: true });
+      s = room.engine.apply(s, by, a);
+      moves += 1;
+    }
+    expect(room.engine.isTerminal(s)).toBe(true);
+    const { placements, draw } = room.engine.result(s);
+    expect(draw).toBe(false);
+    expect(placements.flat().sort()).toEqual(ids(n).sort());
   });
 });
 

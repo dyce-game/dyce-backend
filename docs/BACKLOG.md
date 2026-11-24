@@ -91,7 +91,7 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 ## Games platform follow-ups (deferred from ADR-016)
 
 - Pool matches: stakes (`stake_pool`), age gate, mode sheet stake presets and pot, counter-offer (once), 24h no-reply refund, daily limits, payout on finish (`settle_match` already handles the ledger)
-- Turn timers and forfeit past the timer (`turn_deadline` is not set yet), "No reply in 24h" invite expiry as a scheduled job (today an invite expires when it is next read)
+- Turn timers for Free matches (Pool has a 24 hour clock, ADR-041; Free has none), and "No reply in 24h" invite expiry as a scheduled job (the 5-minute sweep does it for Pool and Free alike)
 - Push for "your turn", invites and results; the chat list preview ("Your turn") for a game card
 - XP, streaks, badges, the friends leaderboard and the result screen's XP/streak panels; stats on Profile and head-to-head in Chat info
 - Games drawer: video thumbnails, search, the category chips beyond what exists, Spaces tiles; the drawer/mode sheet from a group chat
@@ -101,7 +101,7 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 ## Social layer follow-ups (deferred from ADR-024)
 
 - Push for real: send a test notification through the Expo Push API with a real EAS project id; read delivery **receipts** (a second call ~15 minutes later) to prune tokens; lock-screen actions (Play / Accept / Decline / Later) need categories and background handlers
-- Streak saver (24 h to win and restore a lost streak) and "streak at risk" push: need a scheduled job; the badge and level notifications are in-app only
+- Streak saver: done (ADR-042). Still open: the "streak at risk" push; the badge and level notifications are in-app only
 - Opt-out from the global leaderboard and from being found by name; "Near you" and "Playing now" (needs presence); Lagos / Nigeria scoped boards from the design
 - Badge detail with progress (e.g. 7 of 10), the Doodle Artist badge (with Doodle Guess), Whot Master counts only finished Whot! games
 - A materialized or cached weekly board when the global board gets large (today it aggregates `xp_events` live; `leaderboard_weekly` is unused and could be dropped)
@@ -110,9 +110,9 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 
 ## Catalogue follow-ups (deferred from ADR-036)
 
-- **Ludo 3-4 players, live (card-room style).** `games.sync` is per slug, so add a second slug (for example `ludo-room`, live, 3-4 players) with a `LIVE_GAMES` `turns` entry (`engine: ludoEngine`, `buildCfg: () => ({ tokens: 4 })`, `autoAction: ludoAutoAction`, `turnMs` about 25 s), its `games` row, and a Spaces table in the app. Async Ludo stays 2 players.
-- A per-match option at create (Ayo or Kalah, Darts 501 or Around the clock, Sea Battle salvo, Mini Golf and Word Tiles seat count) instead of one fixed `cfg` per slug.
-- Async turn clocks: nothing sets `turn_deadline`, so a timeout does not become the engines' auto action (`fillerAutoAction`, `tanksAutoAction`, `miniGolfAutoAction`, a Word Tiles pass, a harmless 8 Ball or Darts shot) and a no-show never forfeits.
+- **Ludo room: done (ADR-043).** Still open: a 4-device run, a Ludo-specific timeout run in a real room.
+- Per-match options: done (ADR-041) for Ayo/Kalah, Darts 501/Around the clock and Sea Battle salvo; Mini Golf and Word Tiles seat counts (2 to 4 in a group) are still open.
+- Async turn clocks: Pool matches have one (24 hours, a forfeit, ADR-041). Free matches have none, and a timeout is a forfeit, not the engines' auto action (`fillerAutoAction`, `tanksAutoAction`, ...): a per-game clock and an auto action for Free are still open.
 - Spaces' seat fee should respect `games.pool_min_stake_kobo` too (only async matches check it today).
 - A bigger Word Tiles dictionary (public-domain ENABLE, licence permitting) loaded through `WORD_TILES_WORDLIST_FILE` before Pool is switched on for it; keep the old id registered while its matches are live.
 
@@ -122,7 +122,7 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 - A payout hold exists now (ADR-039) but only *before* settlement. A dispute opened after the pot was paid still cannot freeze it (the money rule above is still open); a dispute on a match that an anti-cheat signal flagged but did not hold could point the moderator at its signals (they are in `moderation_signal_queue` by match id).
 - Done: a moderation tool on top of `moderation_dispute_queue` (ADR-039, JSON API and CLI, no UI by design for v1). Still open: a push or notification when a dispute is decided (`_notify` kind `dispute_resolved`, and the app's Notifications list mapping).
 - Account deletion: hide the profile during the 30 day grace period; decide whether messages a deleted person sent should stay with the recipients (NDPA erasure, legal review); push the cancelled-match change to the other player's card (it catches up when read); delete also the person's uploaded media once chats carry photos; a "deletion cancelled, welcome back" signal in the sign-in response.
-- Streak saver (SPEC section 9: 24 hours to win one game after losing a streak). Not buildable on the current data: the award trigger (0018) resets a broken streak to 1 and `streaks.saver_expires_at` is never written. A rule that fits: a `BEFORE UPDATE` snapshot of `streaks.current` and `last_win_date` on the finishing match, and an `AFTER` step that, for a **Free** win on the Lagos day after the missed day (`last_win_date + 2`), sets `current = snapshot + 1`; plus `GET /me/streak` (`current`, `best`, `lost: { length, restoreUntil } | null`) for the StreakLost screen.
+- Streak saver: built (ADR-042, migration 0030). The product still has to confirm its rules: Free win only, once a week, streaks of 2 or more.
 - Per-game record for the game detail sheet ("19 W · 11 L", biggest pot, friends who play) and badge progress and rarity (`N / M`, "12% of players"): needs aggregate endpoints.
 - Public spaces (`visibility: 'public'`) with "Open now" and search by name for strangers; a seat-opened waitlist ("Notify me if a seat opens").
 - Conversation mute (`conversation_members.muted_until` exists, no endpoint) for the game menu's mute row.
@@ -136,3 +136,10 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 - A hold only exists before settlement. Anything that should reach back to a paid pot needs the ADR-037 money decision first.
 - Moderator ergonomics: a UI, alerts when a hold is close to lapsing (today: `lapses_at` in the hold queue and a log line when a hold lapses), assignment between moderators, saved replies.
 - Per-instance rate-limit counters (ARCHITECTURE: needs Redis with more than one API instance); the per-address limit still applies to anonymous routes.
+
+
+## Pool, options, Ludo room, streak saver (ADR-041 to ADR-043)
+- Word Tiles Pool needs a full word list in production, then one migration (`UPDATE games SET supports_pool = true WHERE slug = 'word-tiles'`).
+- Pool signals for solver-friendly games (Word Hunt, Anagrams: a perfect score found fast) and engine-like Chess play; the weights in ADR-039 are still a first guess.
+- A per-game `pool_turn_hours` (a Cup Pong throw against 24 hours) and a push before a forfeit.
+- Rolling the Pool forfeit result back to `forfeit` after `settle_match` (it reads `loss`, as for a resignation).
