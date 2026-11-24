@@ -3,6 +3,7 @@ export * from './format.ts';
 export * from './queryKeys.ts';
 export * from './config.ts';
 export * from './phone.ts';
+export * from './email.ts';
 export * from './schemas/auth.ts';
 export * from './schemas/contacts.ts';
 export * from './schemas/friends.ts';

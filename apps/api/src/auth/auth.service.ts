@@ -1,13 +1,23 @@
 import { randomUUID } from 'node:crypto';
 import type pg from 'pg';
-import { maskPhone, normalizePhone, type SessionResponse, type SessionTokens } from '@dyce/shared';
+import {
+  maskEmail,
+  maskPhone,
+  normalizeEmail,
+  normalizePhone,
+  type SessionResponse,
+  type SessionTokens,
+} from '@dyce/shared';
 import { withTx } from '../db/tx.ts';
+import { otpEmail } from '../email/email-templates.ts';
+import { EmailDeliveryError, type EmailProvider } from '../email/email-provider.ts';
 import { loadNextStep } from '../profile/onboarding.ts';
 import type { SmsProvider } from '../sms/sms-provider.ts';
 import { SmsDeliveryError } from '../sms/sms-provider.ts';
 import { AuthError } from './auth-error.ts';
 import {
   generateOtp,
+  hashEmail,
   hashOtp,
   hashPhone,
   lockKey,
@@ -18,11 +28,11 @@ import {
 import type { Clock, TokenService } from './tokens.ts';
 
 export type AuthConfig = {
-  /** Secret for phone/OTP hashing (PHONE_HASH_SALT). */
+  /** Secret for phone, email and OTP hashing (PHONE_HASH_SALT). */
   phoneSecret: string;
   otpTtlSeconds: number;
   refreshTtlDays: number;
-  /** Non-production only: every challenge uses this code and no SMS is sent. */
+  /** Non-production only: every challenge uses this code and nothing is sent (SMS or email). */
   otpTestCode?: string;
 };
 
@@ -43,6 +53,24 @@ type OtpRow = {
 
 type Logger = { warn(message: string): void };
 
+type UserRow = {
+  id: string;
+  inserted: boolean;
+  disabled_at: Date | null;
+  suspended: boolean;
+};
+
+/**
+ * A way to prove who you are: a phone number or an email address. Only the keyed hash is ever stored. The column
+ * names below are fixed strings chosen here, never user input, so they are safe to put in SQL.
+ */
+type Identity =
+  | { kind: 'phone'; hash: Buffer; column: 'phone_hash' }
+  | { kind: 'email'; hash: Buffer; column: 'email_hash'; hint: string };
+
+/** Who is signed in and how they can sign back in (Settings shows this). */
+export type SignInMethods = { phone: boolean; emailHint: string | null };
+
 export class AuthService {
   constructor(
     private readonly pool: pg.Pool,
@@ -51,33 +79,61 @@ export class AuthService {
     private readonly config: AuthConfig,
     private readonly clock: Clock = () => new Date(),
     private readonly logger: Logger = { warn: () => undefined },
+    /** Without a provider, email sign-in is off: every email route answers `email_auth_disabled`. */
+    private readonly email?: EmailProvider,
   ) {}
 
-  private phoneToHash(phone: string, country?: string): { e164: string; hash: Buffer } {
+  /** What this server offers, for the app to show or hide the email buttons. */
+  methods(): { phone: true; email: boolean } {
+    return { phone: true, email: this.email !== undefined };
+  }
+
+  private phoneIdentity(phone: string, country?: string): { e164: string; identity: Identity } {
     const e164 = normalizePhone(phone, country);
     if (!e164) throw new AuthError('invalid_phone');
-    return { e164, hash: hashPhone(this.config.phoneSecret, e164) };
+    return {
+      e164,
+      identity: {
+        kind: 'phone',
+        hash: hashPhone(this.config.phoneSecret, e164),
+        column: 'phone_hash',
+      },
+    };
+  }
+
+  private emailIdentity(raw: string): { address: string; identity: Identity } {
+    if (!this.email) throw new AuthError('email_auth_disabled');
+    const address = normalizeEmail(raw);
+    if (!address) throw new AuthError('invalid_email');
+    return {
+      address,
+      identity: {
+        kind: 'email',
+        hash: hashEmail(this.config.phoneSecret, address),
+        column: 'email_hash',
+        hint: maskEmail(address),
+      },
+    };
   }
 
   // ---- OTP ----------------------------------------------------------------------------------
 
   /**
-   * Sends a one-time code. The response is identical whether or not the number already has an
-   * account, so this endpoint can't be used to find out who is on Dyce.
+   * Creates a challenge for an identity, enforcing the limits: a 30 s cooldown, 3 per 10 minutes and 10 per day,
+   * per phone or per address. Serialised per identity so concurrent requests can't slip past them. Returns the
+   * challenge id and the plain code (the caller delivers it).
    */
-  async requestOtp(input: { phone: string; country?: string }): Promise<{
-    resendAfterSeconds: number;
-    expiresInSeconds: number;
-  }> {
-    const { e164, hash } = this.phoneToHash(input.phone, input.country);
-    const now = this.clock();
+  private async issueChallenge(
+    identity: Identity,
+    now: Date,
+  ): Promise<{ id: string; code: string; testMode: boolean }> {
     const testMode = this.config.otpTestCode !== undefined;
     const code = this.config.otpTestCode ?? generateOtp();
     const id = randomUUID();
+    const col = identity.column;
 
     await withTx(this.pool, async (c) => {
-      // Serialise per phone so concurrent requests can't slip past the rate limits.
-      await c.query('SELECT pg_advisory_xact_lock($1::bigint)', [lockKey(hash)]);
+      await c.query('SELECT pg_advisory_xact_lock($1::bigint)', [lockKey(identity.hash)]);
 
       const windowStart = new Date(now.getTime() - DAY_MS);
       const tenMinStart = new Date(now.getTime() - TEN_MIN_MS);
@@ -93,8 +149,8 @@ export class AuthService {
                 count(*) AS day_count,
                 min(created_at) FILTER (WHERE created_at > $3) AS oldest_ten,
                 min(created_at) AS oldest_day
-           FROM otp_challenges WHERE phone_hash = $1 AND created_at > $2`,
-        [hash, windowStart, tenMinStart],
+           FROM otp_challenges WHERE ${col} = $1 AND created_at > $2`,
+        [identity.hash, windowStart, tenMinStart],
       );
       const row = r.rows[0]!;
       const secondsUntil = (t: Date, windowMs: number) =>
@@ -120,23 +176,81 @@ export class AuthService {
       }
 
       await c.query(
-        `INSERT INTO otp_challenges (id, phone_hash, code_hash, expires_at, created_at)
+        `INSERT INTO otp_challenges (id, ${col}, code_hash, expires_at, created_at)
          VALUES ($1, $2, $3, $4, $5)`,
         [
           id,
-          hash,
+          identity.hash,
           hashOtp(this.config.phoneSecret, id, code),
           new Date(now.getTime() + this.config.otpTtlSeconds * 1000),
           now,
         ],
       );
     });
+    return { id, code, testMode };
+  }
+
+  /**
+   * Checks a code against the newest open challenge for an identity, inside the caller's transaction. Returns null
+   * when it is right (and marks it used) or the error to report. The caller RETURNS the error instead of throwing it,
+   * so that a wrong-guess counter committed here is not rolled back.
+   */
+  private async consumeChallenge(
+    c: pg.PoolClient,
+    identity: Identity,
+    code: string,
+    now: Date,
+  ): Promise<AuthError | null> {
+    await c.query('SELECT pg_advisory_xact_lock($1::bigint)', [lockKey(identity.hash)]);
+
+    const r = await c.query<OtpRow>(
+      `SELECT id, code_hash, attempts, expires_at FROM otp_challenges
+        WHERE ${identity.column} = $1 AND consumed_at IS NULL
+        ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
+      [identity.hash],
+    );
+    const challenge = r.rows[0];
+    if (!challenge) return new AuthError('otp_invalid');
+    if (challenge.expires_at <= now) return new AuthError('otp_expired');
+    if (challenge.attempts >= OTP_MAX_ATTEMPTS) return new AuthError('otp_locked');
+
+    const expected = hashOtp(this.config.phoneSecret, challenge.id, code);
+    if (!safeEqual(expected, challenge.code_hash)) {
+      const u = await c.query<{ attempts: number }>(
+        'UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts',
+        [challenge.id],
+      );
+      const remaining = Math.max(0, OTP_MAX_ATTEMPTS - (u.rows[0]?.attempts ?? OTP_MAX_ATTEMPTS));
+      return remaining === 0
+        ? new AuthError('otp_locked')
+        : new AuthError('otp_invalid', { attemptsRemaining: remaining });
+    }
+
+    await c.query('UPDATE otp_challenges SET consumed_at = $2 WHERE id = $1', [challenge.id, now]);
+    return null;
+  }
+
+  private ttlMinutes(): number {
+    return Math.max(1, Math.round(this.config.otpTtlSeconds / 60));
+  }
+
+  /**
+   * Sends a one-time code by SMS. The response is identical whether or not the number already has an
+   * account, so this endpoint can't be used to find out who is on Dyce.
+   */
+  async requestOtp(input: { phone: string; country?: string }): Promise<{
+    resendAfterSeconds: number;
+    expiresInSeconds: number;
+  }> {
+    const { e164, identity } = this.phoneIdentity(input.phone, input.country);
+    const now = this.clock();
+    const { id, code, testMode } = await this.issueChallenge(identity, now);
 
     if (!testMode) {
       try {
         await this.sms.send(
           e164,
-          `Your Dyce code is ${code}. It expires in ${Math.round(this.config.otpTtlSeconds / 60)} minutes. Never share it.`,
+          `Your Dyce code is ${code}. It expires in ${this.ttlMinutes()} minutes. Never share it.`,
         );
       } catch (err) {
         // Don't burn the user's rate limit on our provider's failure.
@@ -147,10 +261,48 @@ export class AuthService {
       }
     }
 
+    return this.requested();
+  }
+
+  /**
+   * Sends a one-time code by email (ADR-044). Same promises as the phone: an identical answer whether or not the
+   * address has an account, the same limits, and nothing stored but hashes.
+   */
+  async requestEmailOtp(input: { email: string }): Promise<{
+    resendAfterSeconds: number;
+    expiresInSeconds: number;
+  }> {
+    const { address, identity } = this.emailIdentity(input.email);
+    await this.sendEmailCode(address, identity, 'signin');
+    return this.requested();
+  }
+
+  private requested() {
     return {
       resendAfterSeconds: OTP_RESEND_COOLDOWN_SECONDS,
       expiresInSeconds: this.config.otpTtlSeconds,
     };
+  }
+
+  private async sendEmailCode(
+    address: string,
+    identity: Identity,
+    purpose: 'signin' | 'link',
+  ): Promise<void> {
+    const now = this.clock();
+    const { id, code, testMode } = await this.issueChallenge(identity, now);
+    if (testMode) return;
+    try {
+      const mail = otpEmail({ code, ttlMinutes: this.ttlMinutes(), purpose });
+      await this.email!.send({ to: address, ...mail, idempotencyKey: `otp-${id}` });
+    } catch (err) {
+      // Don't burn the user's rate limit on our provider's failure.
+      await this.pool.query('DELETE FROM otp_challenges WHERE id = $1', [id]);
+      const provider = err instanceof EmailDeliveryError ? err.provider : 'unknown';
+      const status = err instanceof EmailDeliveryError && err.status ? ` HTTP ${err.status}` : '';
+      this.logger.warn(`email otp send failed via ${provider}${status} to ${maskEmail(address)}`);
+      throw new AuthError('email_failed');
+    }
   }
 
   /** Checks the code and, on success, finds or creates the account and starts a session. */
@@ -159,59 +311,39 @@ export class AuthService {
     country?: string;
     code: string;
   }): Promise<SessionResponse> {
-    const { hash } = this.phoneToHash(input.phone, input.country);
+    const { identity } = this.phoneIdentity(input.phone, input.country);
+    return this.verifyIdentity(identity, input.code);
+  }
+
+  /** The same, for an email address. A new address creates an account; a known one logs in. */
+  async verifyEmailOtp(input: { email: string; code: string }): Promise<SessionResponse> {
+    const { identity } = this.emailIdentity(input.email);
+    return this.verifyIdentity(identity, input.code);
+  }
+
+  private async verifyIdentity(identity: Identity, code: string): Promise<SessionResponse> {
     const now = this.clock();
 
     type Outcome = { ok: true; session: SessionResponse } | { ok: false; error: AuthError };
 
     const outcome = await withTx<Outcome>(this.pool, async (c) => {
-      await c.query('SELECT pg_advisory_xact_lock($1::bigint)', [lockKey(hash)]);
+      const failure = await this.consumeChallenge(c, identity, code, now);
+      if (failure) return { ok: false, error: failure };
 
-      const r = await c.query<OtpRow>(
-        `SELECT id, code_hash, attempts, expires_at FROM otp_challenges
-          WHERE phone_hash = $1 AND consumed_at IS NULL
-          ORDER BY created_at DESC LIMIT 1 FOR UPDATE`,
-        [hash],
-      );
-      const challenge = r.rows[0];
-      if (!challenge) return { ok: false, error: new AuthError('otp_invalid') };
-      if (challenge.expires_at <= now) return { ok: false, error: new AuthError('otp_expired') };
-      if (challenge.attempts >= OTP_MAX_ATTEMPTS)
-        return { ok: false, error: new AuthError('otp_locked') };
-
-      const expected = hashOtp(this.config.phoneSecret, challenge.id, input.code);
-      if (!safeEqual(expected, challenge.code_hash)) {
-        // Commit the failed attempt (returning, not throwing, so it isn't rolled back).
-        const u = await c.query<{ attempts: number }>(
-          'UPDATE otp_challenges SET attempts = attempts + 1 WHERE id = $1 RETURNING attempts',
-          [challenge.id],
-        );
-        const remaining = Math.max(0, OTP_MAX_ATTEMPTS - (u.rows[0]?.attempts ?? OTP_MAX_ATTEMPTS));
-        return {
-          ok: false,
-          error:
-            remaining === 0
-              ? new AuthError('otp_locked')
-              : new AuthError('otp_invalid', { attemptsRemaining: remaining }),
-        };
-      }
-
-      await c.query('UPDATE otp_challenges SET consumed_at = $2 WHERE id = $1', [
-        challenge.id,
-        now,
-      ]);
-
-      const u = await c.query<{
-        id: string;
-        inserted: boolean;
-        disabled_at: Date | null;
-        suspended: boolean;
-      }>(
-        `INSERT INTO users (phone_hash, created_at) VALUES ($1, $2)
-         ON CONFLICT (phone_hash) DO UPDATE SET phone_hash = users.phone_hash
-         RETURNING id, (xmax = 0) AS inserted, disabled_at, coalesce(suspended_until > $2, false) AS suspended`,
-        [hash, now],
-      );
+      const u =
+        identity.kind === 'phone'
+          ? await c.query<UserRow>(
+              `INSERT INTO users (phone_hash, created_at) VALUES ($1, $2)
+               ON CONFLICT (phone_hash) DO UPDATE SET phone_hash = users.phone_hash
+               RETURNING id, (xmax = 0) AS inserted, disabled_at, coalesce(suspended_until > $2, false) AS suspended`,
+              [identity.hash, now],
+            )
+          : await c.query<UserRow>(
+              `INSERT INTO users (email_hash, email_hint, email_verified_at, created_at) VALUES ($1, $3, $2, $2)
+               ON CONFLICT (email_hash) DO UPDATE SET email_hash = users.email_hash
+               RETURNING id, (xmax = 0) AS inserted, disabled_at, coalesce(suspended_until > $2, false) AS suspended`,
+              [identity.hash, now, identity.hint],
+            );
       const user = u.rows[0]!;
       if (user.disabled_at) return { ok: false, error: new AuthError('account_disabled') };
       // A moderator suspended this account (ADR-039): no new session until the suspension ends or is lifted.
@@ -230,6 +362,113 @@ export class AuthService {
 
     if (!outcome.ok) throw outcome.error;
     return outcome.session;
+  }
+
+  // ---- Adding the other way in to an account that is signed in ------------------------------
+
+  /** Which ways in an account has. */
+  async signInMethods(userId: string): Promise<SignInMethods> {
+    const r = await this.pool.query<{ has_phone: boolean; email_hint: string | null }>(
+      'SELECT phone_hash IS NOT NULL AS has_phone, email_hint FROM users WHERE id = $1',
+      [userId],
+    );
+    const row = r.rows[0];
+    if (!row) throw new AuthError('unauthorized');
+    return { phone: row.has_phone, emailHint: row.email_hint };
+  }
+
+  /** Step 1 of linking an email to your account: refuse an address another account uses, then send a code. */
+  async requestEmailLink(
+    userId: string,
+    input: { email: string },
+  ): Promise<{ resendAfterSeconds: number; expiresInSeconds: number }> {
+    const { address, identity } = this.emailIdentity(input.email);
+    await this.assertFree(userId, identity);
+    await this.sendEmailCode(address, identity, 'link');
+    return this.requested();
+  }
+
+  /** Step 2: the code proves the address is theirs; it becomes a way to sign in to this account. */
+  async verifyEmailLink(
+    userId: string,
+    input: { email: string; code: string },
+  ): Promise<SignInMethods> {
+    const { identity } = this.emailIdentity(input.email);
+    return this.verifyLink(userId, identity, input.code);
+  }
+
+  /** Step 1 of adding a phone number to an account that signed up with email. */
+  async requestPhoneLink(
+    userId: string,
+    input: { phone: string; country?: string },
+  ): Promise<{ resendAfterSeconds: number; expiresInSeconds: number }> {
+    const { e164, identity } = this.phoneIdentity(input.phone, input.country);
+    await this.assertFree(userId, identity);
+    const now = this.clock();
+    const { id, code, testMode } = await this.issueChallenge(identity, now);
+    if (!testMode) {
+      try {
+        await this.sms.send(
+          e164,
+          `Your Dyce code is ${code}. It expires in ${this.ttlMinutes()} minutes. Never share it.`,
+        );
+      } catch (err) {
+        await this.pool.query('DELETE FROM otp_challenges WHERE id = $1', [id]);
+        const provider = err instanceof SmsDeliveryError ? err.provider : 'unknown';
+        this.logger.warn(`otp send failed via ${provider} to ${maskPhone(e164)}`);
+        throw new AuthError('sms_failed');
+      }
+    }
+    return this.requested();
+  }
+
+  async verifyPhoneLink(
+    userId: string,
+    input: { phone: string; country?: string; code: string },
+  ): Promise<SignInMethods> {
+    const { identity } = this.phoneIdentity(input.phone, input.country);
+    return this.verifyLink(userId, identity, input.code);
+  }
+
+  /** A phone or address that already belongs to someone else (or to you) cannot be linked again. */
+  private async assertFree(userId: string, identity: Identity): Promise<void> {
+    const r = await this.pool.query<{ id: string }>(
+      `SELECT id FROM users WHERE ${identity.column} = $1`,
+      [identity.hash],
+    );
+    const owner = r.rows[0];
+    if (owner && owner.id !== userId) throw new AuthError('identity_taken');
+  }
+
+  private async verifyLink(
+    userId: string,
+    identity: Identity,
+    code: string,
+  ): Promise<SignInMethods> {
+    const now = this.clock();
+    type Outcome = { ok: true } | { ok: false; error: AuthError };
+    const outcome = await withTx<Outcome>(this.pool, async (c) => {
+      const failure = await this.consumeChallenge(c, identity, code, now);
+      if (failure) return { ok: false, error: failure };
+      const taken = await c.query<{ id: string }>(
+        `SELECT id FROM users WHERE ${identity.column} = $1 FOR UPDATE`,
+        [identity.hash],
+      );
+      if (taken.rows[0] && taken.rows[0].id !== userId) {
+        return { ok: false, error: new AuthError('identity_taken') };
+      }
+      if (identity.kind === 'email') {
+        await c.query(
+          'UPDATE users SET email_hash = $2, email_hint = $3, email_verified_at = $4 WHERE id = $1',
+          [userId, identity.hash, identity.hint, now],
+        );
+      } else {
+        await c.query('UPDATE users SET phone_hash = $2 WHERE id = $1', [userId, identity.hash]);
+      }
+      return { ok: true };
+    });
+    if (!outcome.ok) throw outcome.error;
+    return this.signInMethods(userId);
   }
 
   // ---- Sessions -----------------------------------------------------------------------------

@@ -63,6 +63,18 @@ export const otpCodeSchema = z.string().regex(/^\d{6}$/, 'Enter the 6-digit code
 export const otpVerifySchema = otpRequestSchema.extend({ code: otpCodeSchema });
 export type OtpVerify = z.infer<typeof otpVerifySchema>;
 
+/** Email sign-in (ADR-044): the same one-time-code flow as the phone, sent through Resend. */
+export const emailInputSchema = z.string().trim().min(3).max(254);
+
+export const emailOtpRequestSchema = z.object({ email: emailInputSchema });
+export type EmailOtpRequest = z.infer<typeof emailOtpRequestSchema>;
+
+export const emailOtpVerifySchema = emailOtpRequestSchema.extend({ code: otpCodeSchema });
+export type EmailOtpVerify = z.infer<typeof emailOtpVerifySchema>;
+
+/** Which ways in this server offers (email can be switched off). Public, so the app can hide what is off. */
+export type AuthMethods = { phone: true; email: boolean };
+
 export const refreshSchema = z.object({ refreshToken: z.string().min(20).max(256) });
 
 export const profileCreateSchema = z.object({

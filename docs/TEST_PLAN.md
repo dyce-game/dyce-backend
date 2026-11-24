@@ -91,6 +91,19 @@ Owner: qa-engineer. Server-side layers for `dyce-backend`; the app side is in `.
 | All five: ticks only from the room; identical hash in the cross-runtime scenario | each engine validate tests; `pnpm test:determinism` (36 scenarios, Node) |
 | Word packs: every entry passes the profanity check, no repeats | `word packs` |
 
+## 3g. Email sign-in and what proves it (ADR-044)
+
+| Rule | Proof |
+|---|---|
+| Addresses are normalised and masked; plus tags kept distinct | `packages/shared/src/email.test.ts` |
+| An address never reaches the database, a log or an error in the clear | `db/tests/email-auth.test.ts`, `scripts/email-e2e.mjs`, `redact.test.ts` |
+| Sign-up and log-in are one flow; the answer is identical for known and unknown addresses | `email-auth.test.ts` |
+| 30 s, 3 in 10 min, 10 a day, 5 wrong tries, 5 min expiry; a failed send does not burn the limit | `email-auth.test.ts` |
+| Linking: add an email or a phone, `identity_taken`, an account always keeps one identity, deletion clears email | `email-auth.test.ts` |
+| Resend request shape, idempotency key, retries on 429, 5xx and network, errors without secrets | `email-provider.test.ts`, `scripts/email-e2e.mjs` |
+| Switch off and production refusal of the console driver | `env.test.ts`, `scripts/email-e2e.mjs` |
+| **Not proved:** a real inbox, spam placement, bounces | needs a Resend account (`Dyce/docs/SETUP_GUIDE.md` section 4) |
+
 ## 3c. Spaces and live rooms (ADR-022)
 | Rule | Test |
 | --- | --- |

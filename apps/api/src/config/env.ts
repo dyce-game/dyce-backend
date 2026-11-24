@@ -24,6 +24,19 @@ export const envSchema = z
     OTP_TEST_CODE: optional(z.string().regex(/^\d{6}$/, 'OTP_TEST_CODE must be 6 digits')),
     /** "console" prints codes (masked number) to the log; "real" sends through Termii/Twilio. */
     SMS_DRIVER: z.enum(['console', 'real']).default('console'),
+    /** Email sign-in and sign-up (ADR-044). Off = the email routes answer 404 and the app hides the option. */
+    EMAIL_AUTH_ENABLED: z
+      .enum(['true', 'false'])
+      .default('true')
+      .transform((v) => v === 'true'),
+    /** "console" prints codes (dev); "resend" sends through Resend (required in production when email sign-in is on). */
+    EMAIL_DRIVER: z.enum(['console', 'resend']).default('console'),
+    RESEND_API_KEY: optional(z.string().min(1)),
+    /** The verified sending address: `Dyce <login@mail.dyce.games>` or a bare address on a domain verified in Resend. */
+    EMAIL_FROM: optional(z.string().min(5).max(200)),
+    EMAIL_REPLY_TO: optional(z.string().min(5).max(200)),
+    /** Tests and proxies only; defaults to https://api.resend.com. */
+    RESEND_BASE_URL: optional(z.url()),
     TERMII_API_KEY: optional(z.string().min(1)),
     TERMII_SENDER_ID: optional(z.string().min(1)),
     TERMII_BASE_URL: optional(z.url()),
@@ -105,6 +118,21 @@ export const envSchema = z
         'is required when ADMIN_TOKENS is set (the moderation API has its own database role)',
       );
     }
+    if (env.NODE_ENV === 'production' && env.EMAIL_AUTH_ENABLED && env.EMAIL_DRIVER !== 'resend') {
+      fail(
+        'EMAIL_DRIVER',
+        'must be "resend" in production while EMAIL_AUTH_ENABLED is true (the console driver prints codes to the log); set EMAIL_AUTH_ENABLED=false to run without email sign-in',
+      );
+    }
+    if (env.EMAIL_DRIVER === 'resend') {
+      if (!env.RESEND_API_KEY) fail('RESEND_API_KEY', 'is required when EMAIL_DRIVER is "resend"');
+      if (!env.EMAIL_FROM || !isSenderAddress(env.EMAIL_FROM)) {
+        fail(
+          'EMAIL_FROM',
+          'is required for Resend, as `Name <address@your-domain>` or a bare address',
+        );
+      }
+    }
     if (env.SMS_DRIVER === 'real' && !hasTermii(env) && !hasTwilio(env)) {
       fail(
         'SMS_DRIVER',
@@ -114,6 +142,14 @@ export const envSchema = z
   });
 
 export type Env = z.infer<typeof envSchema>;
+
+/** `Dyce <login@mail.dyce.games>` or `login@mail.dyce.games`. */
+export function isSenderAddress(value: string): boolean {
+  const v = value.trim();
+  const bare = /^[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+$/;
+  const named = /^[^<>@\r\n]{1,100}<[^\s<>@]+@[^\s<>@]+\.[^\s<>@]+>$/;
+  return bare.test(v) || named.test(v);
+}
 
 export function hasTermii(env: Pick<Env, 'TERMII_API_KEY' | 'TERMII_SENDER_ID'>): boolean {
   return Boolean(env.TERMII_API_KEY && env.TERMII_SENDER_ID);

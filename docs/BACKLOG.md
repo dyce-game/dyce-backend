@@ -138,6 +138,14 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 - Per-instance rate-limit counters (ARCHITECTURE: needs Redis with more than one API instance); the per-address limit still applies to anonymous routes.
 
 
+## Email sign-in follow-ups (deferred from ADR-044)
+- **Resend webhooks:** read bounces and complaints, and stop sending to an address that bounced or complained; today it is a weekly look at the Resend dashboard.
+- Block disposable-email domains (a list, or Resend's own checks) if sign-up abuse appears.
+- Tell the previous address when the email on an account is changed, and the phone when a phone is changed.
+- Recovery for a person who loses both their email and phone: a support process is a product decision.
+- Joining an SMS invite with an email-only account: the invite is tied to a phone number, so an email account claims it by adding that phone first (check the flow with real invites).
+- Sign in with Apple / Google (the stores may ask for it if another third-party sign-in is added; email and phone do not trigger it).
+
 ## Pool, options, Ludo room, streak saver (ADR-041 to ADR-043)
 - Word Tiles Pool needs a full word list in production, then one migration (`UPDATE games SET supports_pool = true WHERE slug = 'word-tiles'`).
 - Pool signals for solver-friendly games (Word Hunt, Anagrams: a perfect score found fast) and engine-like Chess play; the weights in ADR-039 are still a first guess.

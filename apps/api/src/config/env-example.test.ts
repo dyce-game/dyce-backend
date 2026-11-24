@@ -27,9 +27,12 @@ describe('deploy/production.env.example', () => {
     raw.INTERNAL_SECRET = 'i'.repeat(48);
     raw.TERMII_API_KEY = 'k';
     raw.TERMII_SENDER_ID = 'Dyce';
+    raw.RESEND_API_KEY = 're_test_key';
+    raw.EMAIL_FROM = 'Dyce <login@mail.example.com>';
     const env = validateEnv(raw);
     expect(env.NODE_ENV).toBe('production');
     expect(env.SMS_DRIVER).toBe('real');
+    expect(env.EMAIL_DRIVER).toBe('resend');
     expect(env.PUSH_DRIVER).toBe('expo');
     expect(env.LEDGER_CHECK_ENABLED).toBe(true);
     expect(env.OTP_TEST_CODE).toBeUndefined();

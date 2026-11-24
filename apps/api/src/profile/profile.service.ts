@@ -30,6 +30,8 @@ export type Me = {
     requestPolicy: RequestPolicy;
   } | null;
   onboarding: OnboardingState;
+  /** How this person can sign back in: a phone, an email (masked), or both. */
+  signIn: { phone: boolean; emailHint: string | null };
   nextStep: NextStep;
 };
 
@@ -43,8 +45,12 @@ export class ProfileService {
   ) {}
 
   async getMe(userId: string): Promise<Me> {
-    const u = await this.pool.query<{ disabled_at: Date | null }>(
-      'SELECT disabled_at FROM users WHERE id = $1',
+    const u = await this.pool.query<{
+      disabled_at: Date | null;
+      has_phone: boolean;
+      email_hint: string | null;
+    }>(
+      'SELECT disabled_at, phone_hash IS NOT NULL AS has_phone, email_hint FROM users WHERE id = $1',
       [userId],
     );
     if (!u.rows[0]) throw new AuthError('unauthorized');
@@ -78,6 +84,7 @@ export class ProfileService {
           }
         : null,
       onboarding,
+      signIn: { phone: u.rows[0].has_phone, emailHint: u.rows[0].email_hint },
       nextStep: nextOnboardingStep(onboarding),
     };
   }

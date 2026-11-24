@@ -10,7 +10,7 @@ export const REDACTED = '[redacted]';
 
 /** Object keys whose values are never logged. `code` is deliberately absent: error codes are useful. */
 const SENSITIVE_KEY =
-  /(token|secret|password|passwd|authorization|cookie|otp|phone|msisdn|mobile|api[-_]?key|apikey|salt|dsn|signature|credential|contacts?_?hash|jwt)/i;
+  /(token|secret|password|passwd|authorization|cookie|otp|phone|e-?mail|msisdn|mobile|api[-_]?key|apikey|salt|dsn|signature|credential|contacts?_?hash|jwt)/i;
 
 const PATTERNS: readonly [RegExp, string][] = [
   // JWTs (three base64url parts, the first two start like JSON).
@@ -28,6 +28,8 @@ const PATTERNS: readonly [RegExp, string][] = [
     /([?&](?:[\w-]*(?:token|key|secret|otp|code|phone|password|sig|signature)[\w-]*)=)[^\s&"']+/gi,
     `$1${REDACTED}`,
   ],
+  // Email addresses anywhere in free text.
+  [/[a-z0-9._%+-]+@[a-z0-9-]+(?:\.[a-z0-9-]+)+/gi, REDACTED],
   // E.164 and formatted international numbers: +234 803 123 4567, +2348031234567, +1 (415) 555-0100.
   [/\+\d[\d\s().-]{6,17}\d/g, REDACTED],
   // Nigerian numbers without the plus: 2348031234567 and 08031234567.

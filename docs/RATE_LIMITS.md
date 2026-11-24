@@ -15,6 +15,8 @@ Reviewed for Phase 5 (ADR-039). Two layers: **HTTP throttles** (per route, in th
 | Area | Route | Limit | Why |
 | --- | --- | --- | --- |
 | Auth | `POST /auth/otp/request`, `/auth/otp/verify` | 10 per address | SMS cost and guessing; per-phone rules below are the real control |
+| Auth | `POST /auth/email/otp/request`, `/me/email/request` | 5 per address | email cost and mail bombing; the per-address rules below are the real control (ADR-044) |
+| Auth | `POST /auth/email/otp/verify`, `/me/email/verify`, `/me/phone/request`, `/me/phone/verify` | 10 per address | guessing |
 | Auth | `POST /auth/refresh` | 30 per address | token stuffing |
 | Money | `POST /wallet/send` | 30 | |
 | Money | `POST /wallet/requests` | 30 | |
@@ -61,6 +63,7 @@ Reviewed for Phase 5 (ADR-039). Two layers: **HTTP throttles** (per route, in th
 | What | Limit | Where it is enforced |
 | --- | --- | --- |
 | OTP codes per phone | 30 s between, 3 in 10 min, 10 a day, 5 wrong tries per code | `AuthService` |
+| OTP codes per email address | the same limits as the phone, counted per address hash | `AuthService` (ADR-044) |
 | New people you message (strangers) | 20 a Lagos day (`stranger_requests_per_day`) | `MessagesService` |
 | Messages before they answer | 3 (`request_messages_before_accept`), deleted ones included | `MessagesService` |
 | Friend requests | 50 a day (`friend_requests_per_day`) | `FriendsService` |

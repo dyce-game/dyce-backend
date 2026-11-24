@@ -1,6 +1,10 @@
 export type AuthErrorCode =
   | 'validation_failed'
   | 'invalid_phone'
+  | 'invalid_email'
+  | 'email_failed'
+  | 'email_auth_disabled'
+  | 'identity_taken'
   | 'otp_resend_too_soon'
   | 'otp_rate_limited'
   | 'otp_invalid'
@@ -113,6 +117,10 @@ export type AuthErrorCode =
 const STATUS: Record<AuthErrorCode, number> = {
   validation_failed: 422,
   invalid_phone: 422,
+  invalid_email: 422,
+  email_failed: 502,
+  email_auth_disabled: 404,
+  identity_taken: 409,
   otp_resend_too_soon: 429,
   otp_rate_limited: 429,
   otp_invalid: 400,
