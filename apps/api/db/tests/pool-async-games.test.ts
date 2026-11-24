@@ -316,7 +316,7 @@ describe('which games have Pool', () => {
         conversationId: conv,
         gameSlug: 'chess',
         mode: 'pool',
-        stakeKobo: 20_000, // above the platform's ₦100 but under Chess's ₦500
+        stakeKobo: 20_000, // above the platform's Ð100 but under Chess's Ð500
       }),
     ).rejects.toEqual(code('invalid_stake'));
     await expectLedgerClean(db);

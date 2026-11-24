@@ -1,6 +1,7 @@
 import { KOBO_PER_NAIRA, type Kobo } from './money.ts';
 
-const NAIRA = '₦';
+/** The sign for Dyce Cash. It is not the naira sign on purpose: Dyce Cash is virtual (ADR-046). */
+export const CASH_SIGN = 'Ð';
 
 function groupThousands(n: number): string {
   // Manual grouping: Intl differs between Hermes builds and Deno; this is stable everywhere.
@@ -16,14 +17,14 @@ function oneDecimal(value: number, divisor: number): string {
 }
 
 export type FormatNairaOptions = {
-  /** Compact style for pills, headers, list cards: ₦950 · ₦1,500 · ₦12.5k · ₦200k · ₦1.2m */
+  /** Compact style for pills, headers, list cards: Ð950 · Ð1,500 · Ð12.5k · Ð200k · Ð1.2m */
   compact?: boolean;
 };
 
 /**
  * Display kobo as naira. See docs/WALLET_AND_QR.md §1.
- * - full (receipts, confirm sheets): ₦200,000 (kobo shown only when non-zero: ₦1,500.50)
- * - compact: < ₦10,000 → full with separator; ≥ ₦10,000 → k; ≥ ₦1,000,000 → m
+ * - full (receipts, confirm sheets): Ð200,000 (kobo shown only when non-zero: Ð1,500.50)
+ * - compact: < Ð10,000 → full with separator; ≥ Ð10,000 → k; ≥ Ð1,000,000 → m
  */
 export function formatNaira(amount: Kobo | number, opts: FormatNairaOptions = {}): string {
   const negative = amount < 0;
@@ -32,12 +33,12 @@ export function formatNaira(amount: Kobo | number, opts: FormatNairaOptions = {}
   const sign = negative ? '-' : '';
 
   if (opts.compact) {
-    if (naira >= 1_000_000) return `${sign}${NAIRA}${oneDecimal(naira, 1_000_000)}m`;
-    if (naira >= 10_000) return `${sign}${NAIRA}${oneDecimal(naira, 1_000)}k`;
-    return `${sign}${NAIRA}${groupThousands(naira)}`;
+    if (naira >= 1_000_000) return `${sign}${CASH_SIGN}${oneDecimal(naira, 1_000_000)}m`;
+    if (naira >= 10_000) return `${sign}${CASH_SIGN}${oneDecimal(naira, 1_000)}k`;
+    return `${sign}${CASH_SIGN}${groupThousands(naira)}`;
   }
 
   const kobo = abs % KOBO_PER_NAIRA;
   const frac = kobo === 0 ? '' : `.${String(kobo).padStart(2, '0')}`;
-  return `${sign}${NAIRA}${groupThousands(naira)}${frac}`;
+  return `${sign}${CASH_SIGN}${groupThousands(naira)}${frac}`;
 }

@@ -203,7 +203,7 @@ describe('settle_match', () => {
       users.map((u) => u.id),
       { scheme: 'p50_30_20' },
     );
-    for (const u of users) await stake(m, u.id, 1_000 * NAIRA); // pot ₦4,000 → slots 2,000 / 1,200 / 800
+    for (const u of users) await stake(m, u.id, 1_000 * NAIRA); // pot Ð4,000 → slots 2,000 / 1,200 / 800
     await place(m, { [a.id]: 1, [b.id]: 2, [c.id]: 2, [d.id]: 4 });
     await settle(m);
     expect(await payouts(m)).toEqual({

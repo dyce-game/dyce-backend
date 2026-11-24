@@ -56,7 +56,7 @@ export const listConversationsQuerySchema = z.object({
   filter: conversationFilterSchema.default('all'),
 });
 
-/** What a money card in a chat carries (the card text is in `body`, e.g. "Sent ₦5,000"). */
+/** What a money card in a chat carries (the card text is in `body`, e.g. "Sent Ð5,000"). */
 export type MoneySentPayload = { amountKobo: number; note: string; txnId: string };
 export type MoneyRequestPayload = {
   /** null = any amount. */

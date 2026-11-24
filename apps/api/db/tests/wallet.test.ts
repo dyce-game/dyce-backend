@@ -111,7 +111,7 @@ describe('send', () => {
     expect(card).toMatchObject({
       kind: 'money_sent',
       senderId: a.id,
-      body: 'Sent ₦5,000 · suya',
+      body: 'Sent Ð5,000 · suya',
       payload: { amountKobo: 5_000 * NAIRA, note: 'suya', txnId: r.txnId },
     });
     const live = published.filter((p) => p.event.type === 'message');
@@ -128,7 +128,7 @@ describe('send', () => {
       const list = await chat.list(who.id);
       expect(list.conversations[0]!.lastMessage).toMatchObject({
         kind: 'money_sent',
-        body: 'Sent ₦1,000',
+        body: 'Sent Ð1,000',
       });
     }
   });
@@ -279,7 +279,7 @@ describe('payment requests', () => {
     const [card] = await messagesOf(b, a);
     expect(card).toMatchObject({
       kind: 'money_request',
-      body: 'Requested ₦3,000',
+      body: 'Requested Ð3,000',
       payload: { code: view.code, status: 'open', amountKobo: 3_000 * NAIRA },
     });
     const days = (Date.parse(view.expiresAt) - Date.now()) / 86_400_000;
@@ -334,7 +334,7 @@ describe('payment requests', () => {
     expect(card).toMatchObject({
       kind: 'money_sent',
       senderId: payer.id,
-      body: 'Paid ₦2,000 · suya',
+      body: 'Paid Ð2,000 · suya',
     });
     expect((await chat.list(requester.id, 'all')).conversations).toEqual([]);
     expect((await chat.list(requester.id, 'requests')).conversations).toHaveLength(1);

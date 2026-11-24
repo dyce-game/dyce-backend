@@ -728,7 +728,7 @@ describe('deleting messages', () => {
     const card = await chat.postCard(direct.id, admin.id, {
       id: randomUUID(),
       kind: 'money_sent',
-      body: 'Sent ₦500',
+      body: 'Sent Ð500',
       payload: { amountKobo: 50_000, note: '', txnId: randomUUID() },
     });
     await expect(actions.delete(admin.id, direct.id, card.id, 'everyone')).rejects.toEqual(

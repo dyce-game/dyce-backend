@@ -30,7 +30,7 @@ export async function grant(db: TestDb, userId: string): Promise<LedgerResult> {
   return (await db.app.query('SELECT * FROM grant_welcome($1)', [userId])).rows[0];
 }
 
-/** A user with the standard ₦200,000 welcome grant. */
+/** A user with the standard Ð200,000 welcome grant. */
 export async function fundedUser(db: TestDb, opts: { adult?: boolean } = {}): Promise<TestUser> {
   const u = await createUser(db, opts);
   await grant(db, u.id);

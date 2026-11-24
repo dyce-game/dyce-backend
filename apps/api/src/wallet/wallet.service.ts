@@ -509,7 +509,7 @@ export class WalletService {
     return Number(r.rows[0]?.amount ?? 0);
   }
 
-  /** "Sent ₦5,000" (or "Paid ₦2,000 · suya") in the chat between the two people. Never fails the payment. */
+  /** "Sent Ð5,000" (or "Paid Ð2,000 · suya") in the chat between the two people. Never fails the payment. */
   private async cardForTransfer(
     from: string,
     to: string,

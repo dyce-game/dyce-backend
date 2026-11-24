@@ -52,7 +52,7 @@ export type ProfileBadge = {
   slug: string;
   name: string;
   description: string;
-  /** The short mark drawn on the badge ("1st", "10", "₦"). */
+  /** The short mark drawn on the badge ("1st", "10", "Ð"). */
   mark: string;
   color: string;
   earnedAt: string | null;

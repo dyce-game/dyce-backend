@@ -194,7 +194,7 @@ export class ProfileService {
     return { nextStep: nextOnboardingStep(await loadOnboardingState(this.pool, userId)) };
   }
 
-  /** The ₦200k welcome grant. Idempotent: calling it again returns granted=false and changes nothing. */
+  /** The Ð200k welcome grant. Idempotent: calling it again returns granted=false and changes nothing. */
   async claimWelcomeBonus(
     userId: string,
   ): Promise<{ granted: boolean; balanceKobo: number; nextStep: NextStep }> {

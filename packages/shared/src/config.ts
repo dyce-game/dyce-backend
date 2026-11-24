@@ -16,13 +16,13 @@ export const PAYOUT_WEIGHTS: Record<PayoutScheme, readonly number[]> = {
 };
 
 export const appConfigSchema = z.object({
-  /** Per-send cap (kobo). ₦50,000. */
+  /** Per-send cap (kobo). Ð50,000. */
   send_limit_kobo: z.number().int().default(nairaToKobo(50_000)),
-  /** Daily send cap (kobo). ₦200,000. */
+  /** Daily send cap (kobo). Ð200,000. */
   send_daily_limit_kobo: z.number().int().default(nairaToKobo(200_000)),
-  /** Free top-up claimable when balance is under this. ₦10,000. */
+  /** Free top-up claimable when balance is under this. Ð10,000. */
   topup_threshold_kobo: z.number().int().default(nairaToKobo(10_000)),
-  /** Free daily top-up amount. ₦20,000. */
+  /** Free daily top-up amount. Ð20,000. */
   topup_amount_kobo: z.number().int().default(nairaToKobo(20_000)),
   /** Max open QR/payment requests per user. */
   max_open_requests: z.number().int().default(10),

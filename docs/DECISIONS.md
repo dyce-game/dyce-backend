@@ -2,6 +2,12 @@
 
 One entry per decision, newest first. App-side decisions (ADR-001 stack, 002 avatar system, 003 domain, 006 hoisted node_modules for Metro) are in `Dyce/docs/DECISIONS.md`.
 
+## ADR-046 · Dyce Cash is shown with the sign Ð, not the naira sign · 2026-11-24
+
+Context: the Apple review (`Dyce/docs/APPLE_COMPLIANCE.md`, decision D2) found that a naira sign on a virtual currency can read as real money to a reviewer or a regulator (guidelines 2.3.1, 3.1.1 and 5.3). The product owner chose the sign **Ð**.
+Decision: `formatNaira()` (name kept: the integer unit is still kobo, `Kobo` and `KOBO_PER_NAIRA` do not change) now prints `CASH_SIGN` = `Ð`: `Ð200,000`, `Ð12.5k`. Every user-facing string, test, flow and live document that printed ₦ was changed in the same commit; the amount field still accepts a pasted ₦ or Ð. Migration 0033 changes the one stored display mark (the Pool Shark badge). Applied migrations, dated reports (`docs/qa`, `docs/signoff`), ADRs and the status history keep the ₦ they were written with: in them it means the same amount. The app is not changed in what Dyce Cash is: virtual, not bought, not withdrawn.
+Consequences: Ð is also the Dogecoin sign; it is a play-money sign here and nothing in the app is cryptocurrency (3.1.5 does not apply). Message cards already sent keep the old sign in their stored text (pre-launch data only). Owner: wallet-payments-engineer
+
 ## ADR-045 · Apple review readiness: the objectionable-text filter and the review demo logins · 2026-11-24
 
 Context: a review of the App Store Review Guidelines (`Dyce/docs/APPLE_COMPLIANCE.md`) found that guideline 1.2 requires a filter on what people post (only requests and a thin live-room list existed) and guideline 2.1(a) requires a way for App Review to sign in (it cannot receive an SMS or an email).

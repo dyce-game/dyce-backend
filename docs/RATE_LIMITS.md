@@ -73,15 +73,15 @@ Reviewed for Phase 5 (ADR-039). Two layers: **HTTP throttles** (per route, in th
 | Reports filed | 20 a day (`reports_per_day`) | `SafetyService` |
 | Disputes opened | 5 a day (`disputes_per_day`) | `DisputesService` |
 | Open game invites in one chat | 5 (`open_match_invites_per_chat`) | `MatchesService` |
-| **Money sent** | ₦50,000 a send, ₦200,000 a day (`send_limit_kobo`, `send_daily_limit_kobo`) | SQL `transfer` |
+| **Money sent** | Ð50,000 a send, Ð200,000 a day (`send_limit_kobo`, `send_daily_limit_kobo`) | SQL `transfer` |
 | **Open money requests** | 10 (`max_open_requests`) | SQL `create_payment_request` |
 | **Money requests made** | **30 a Lagos day** (`money_requests_per_day`) | `WalletService` (new: the config key existed since migration 0006 and nothing read it) |
 | **Strangers' codes opened** | **20 different codes a Lagos day** (`stranger_scans_per_day`); a friend's or contact's code and one already opened do not count; paying a code counts too | `WalletService`, table `stranger_scans` (new, same story) |
-| Pool stakes | ₦100 to ₦20,000 a game, 20 games and ₦100,000 a day (`pool_*`), 18+, not frozen | SQL `stake_pool` |
+| Pool stakes | Ð100 to Ð20,000 a game, 20 games and Ð100,000 a day (`pool_*`), 18+, not frozen | SQL `stake_pool` |
 | Quick match searches | 30 an hour (`quick_match_per_hour`); three skipped or missed matches in 10 minutes means a wait | `QuickMatchService` |
 | Spaces open at once | `spaces_open_per_user` | `SpacesService` |
 | SMS invites | 50 a day, 3 per number a day, one text per number at a time | `InvitesService` |
-| Daily top-up | once per Lagos day, only under ₦10,000 | SQL `claim_daily_topup` |
+| Daily top-up | once per Lagos day, only under Ð10,000 | SQL `claim_daily_topup` |
 | Realtime sockets | 5 per person, 4 KB frames, typing 20 per 10 s | `RealtimeServer` |
 
 ## Limits that react to behaviour (not counts)

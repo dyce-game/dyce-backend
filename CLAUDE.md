@@ -1,6 +1,6 @@
 # dyce-backend — project rules for Claude Code
 
-This is the **backend** of Dyce, a chat-first mobile app for playing games with friends, family and strangers (Nigeria first; every user starts with **₦200k Dyce Cash**, virtual). The Expo app lives in the sibling repo `../Dyce`; product docs, the build plan and the design are there too.
+This is the **backend** of Dyce, a chat-first mobile app for playing games with friends, family and strangers (Nigeria first; every user starts with **Ð200k Dyce Cash**, virtual). The Expo app lives in the sibling repo `../Dyce`; product docs, the build plan and the design are there too.
 
 Source of truth, in this order (read the relevant ones before changing anything):
 

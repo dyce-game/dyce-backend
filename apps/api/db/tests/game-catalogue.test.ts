@@ -208,7 +208,7 @@ describe('Pool minimums', () => {
           mode: 'pool',
           stakeKobo,
         });
-      await expect(make(20_000)).rejects.toEqual(code('invalid_stake')); // above the platform's ₦100, below Chess's ₦500
+      await expect(make(20_000)).rejects.toEqual(code('invalid_stake')); // above the platform's Ð100, below Chess's Ð500
       const ok = await make(50_000);
       expect(ok.stakeKobo).toBe(50_000);
       // The other person may not counter below it either (0 = play free is fine).

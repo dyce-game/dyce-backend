@@ -3,10 +3,10 @@
 Dyce Cash is **virtual**. It can't be bought, withdrawn or exchanged. Every screen that shows a balance includes or links to that line.
 
 ## 1. Units and display
-- Store and compute in **kobo** (`bigint`). ₦1 = 100 kobo. Starting grant = ₦200,000 = 20,000,000 kobo.
+- Store and compute in **kobo** (`bigint`). Ð1 = 100 kobo. Starting grant = Ð200,000 = 20,000,000 kobo.
 - `formatNaira(kobo, { compact })` in `packages/shared/format.ts`:
-  - compact (balances in pills, tab headers, wallet card, cards in lists): `₦200k`, `₦1.2m`, `₦12.5k`, `₦950`. Rule: < ₦10,000 → full with thousands separator (`₦1,500`); ≥ ₦10,000 → `k` with one decimal dropped when zero (`₦12.5k`, `₦200k`); ≥ ₦1,000,000 → `m`.
-  - full (receipts, confirm sheets, history detail): `₦200,000`.
+  - compact (balances in pills, tab headers, wallet card, cards in lists): `Ð200k`, `Ð1.2m`, `Ð12.5k`, `Ð950`. Rule: < Ð10,000 → full with thousands separator (`Ð1,500`); ≥ Ð10,000 → `k` with one decimal dropped when zero (`Ð12.5k`, `Ð200k`); ≥ Ð1,000,000 → `m`.
+  - full (receipts, confirm sheets, history detail): `Ð200,000`.
 - Amount entry: numeric keypad, whole naira only, presets, max shown.
 
 ## 2. Ledger (double entry)
@@ -30,7 +30,7 @@ All movement goes through `SECURITY DEFINER` functions that lock wallet rows in 
 A nightly pg_cron job checks that every txn sums to zero and that `wallets.balance_kobo` equals the sum of entries; any mismatch alerts Sentry and freezes Pool for affected users.
 
 ## 3. Send
-Wallet › Send, or the ₦ button in a chat. Pick a friend (only friends and contacts; strangers need an accepted chat first), amount, optional note → confirm sheet (avatar, full amount, "Virtual cash · can't be undone") → Face ID / fingerprint / device PIN (`expo-local-authentication`; if not enrolled, a 4-digit Dyce PIN stored as a salted hash server-side) → `transfer()` → "Sent ₦5,000" card posted in the chat + push to the receiver. Limits: ₦50,000 per send, ₦200,000 per day (config).
+Wallet › Send, or the Ð button in a chat. Pick a friend (only friends and contacts; strangers need an accepted chat first), amount, optional note → confirm sheet (avatar, full amount, "Virtual cash · can't be undone") → Face ID / fingerprint / device PIN (`expo-local-authentication`; if not enrolled, a 4-digit Dyce PIN stored as a salted hash server-side) → `transfer()` → "Sent Ð5,000" card posted in the chat + push to the receiver. Limits: Ð50,000 per send, Ð200,000 per day (config).
 
 ## 4. Request money with a QR code
 **Create (requester).** Wallet › Request → amount (optional — "any amount" allowed), note, optional "from" (a specific friend or anyone) → `create_payment_request()` returns a request:
@@ -43,7 +43,7 @@ Wallet › Send, or the ₦ button in a chat. Pick a friend (only friends and co
 - Accept only `https://dyce.games/r/<code>`, `https://dyce.games/u/<username>` (personal code) and the `dyce://` equivalents. Anything else: "That's not a Dyce code."
 - Resolve via Edge Function `resolve-qr` → returns requester public profile, amount, note, status, whether they're a friend/contact. Show the **Pay sheet**: avatar, name, "Not in your contacts" warning for strangers, amount (editable only for any-amount requests and personal codes), note, balance after.
 - Confirm with biometric/PIN → `pay_payment_request(code, idem)` (or `transfer()` for a personal code). Errors: expired, already paid, cancelled, insufficient balance, self-payment, over limit, blocked.
-- Success: receipt screen + "Paid ₦2,000 · for suya" card posted in the chat between the two users (a chat is created if none exists; for strangers it's created in the requester's Requests).
+- Success: receipt screen + "Paid Ð2,000 · for suya" card posted in the chat between the two users (a chat is created if none exists; for strangers it's created in the requester's Requests).
 - Deep link: opening `https://dyce.games/r/<code>` with the system camera opens Dyce straight on the Pay sheet (universal/app links); without Dyce it opens a web page explaining Dyce with an install button.
 
 **Personal "My code".** Wallet › My code shows a static QR for `https://dyce.games/u/<username>` — scanning it opens the Pay sheet with an amount field (and also offers "Add friend" / "Challenge").
@@ -57,11 +57,11 @@ Pool requires `is_adult` and passing daily limits (`daily_usage`). Limits are co
 **Held payouts (ADR-039).** A Pool match calls `settle_or_hold(match)` where it used to call `settle_match`. If the integrity signals for the match add up to the hold threshold, the escrow stays open, nothing moves, the match is `disputed` and a moderator later calls `resolve_integrity_hold`: release (`settle_match` as decided), void (`refund_match`: every stake back) or disqualify one player (placed last, then `settle_match`). A hold nobody decides pays out as decided after 72 hours. No other money path is added; a hold never reaches back to a pot that was already paid.
 
 ## 6. Daily top-up
-If balance < ₦10,000 the user can claim a free ₦20,000 top-up once per day (`system_topup`). Shown as a pill on the Wallet header and on the "Not enough Dyce Cash" sheet. Values in `app_config`.
+If balance < Ð10,000 the user can claim a free Ð20,000 top-up once per day (`system_topup`). Shown as a pill on the Wallet header and on the "Not enough Dyce Cash" sheet. Values in `app_config`.
 
 ## 7. History, receipts, disputes
 History: filter All / Games / Sent / Received / Requests / Top-ups, grouped by day, each row links to a receipt (txn id, parties, game, match, timestamp, entries). Disputes: Pool result → Dispute (reason, note) → `disputes` row → status screen (Open → Reviewing → Resolved: upheld/reversed). Admin resolution uses `reverse_txn()`.
 
 ## 8. Tests that must exist
-pgTAP: grant once; transfer success; insufficient funds; negative amount rejected; idempotent retry returns same txn; two concurrent spends of the last ₦1,000 → exactly one succeeds; request paid twice → second fails; expired request; self-payment rejected; settle with draw; settle 50/30/20 with remainder; refund on expiry; nightly invariant check finds a planted mismatch.
+pgTAP: grant once; transfer success; insufficient funds; negative amount rejected; idempotent retry returns same txn; two concurrent spends of the last Ð1,000 → exactly one succeeds; request paid twice → second fails; expired request; self-payment rejected; settle with draw; settle 50/30/20 with remainder; refund on expiry; nightly invariant check finds a planted mismatch.
 App: formatNaira table tests; Scan screen rejects foreign QR; Pay sheet shows server data not QR data; Maestro flow "request → scan on second device → paid card appears in chat".

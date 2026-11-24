@@ -35,21 +35,21 @@ describe('describeNotification', () => {
         { mode: 'pool', stakeKobo: 100_000, gameName: 'Pig', matchId: 'm' },
         'Tunde',
       ).title,
-    ).toBe('Tunde challenged you for ₦1,000');
+    ).toBe('Tunde challenged you for Ð1,000');
     expect(
       describeNotification(
         'pool_countered',
         { stakeKobo: 100_000, counterStakeKobo: 50_000, gameName: 'Pig', matchId: 'm' },
         'Tunde',
       ).body,
-    ).toBe('Tunde wants ₦500 each instead of ₦1,000.');
+    ).toBe('Tunde wants Ð500 each instead of Ð1,000.');
     expect(
       describeNotification(
         'pool_result',
         { result: 'win', payoutKobo: 200_000, gameName: 'Pig', matchId: 'm' },
         'Tunde',
       ).title,
-    ).toBe('You won ₦2,000');
+    ).toBe('You won Ð2,000');
     expect(
       describeNotification('pool_refunded', { amountKobo: 50_000, reason: 'expired' }, 'Zainab')
         .body,
