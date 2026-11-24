@@ -23,3 +23,4 @@ export * from './schemas/account.ts';
 export * from './schemas/streak.ts';
 export * from './bots.ts';
 export * from './redact.ts';
+export * from './content-filter.ts';

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONTENT_BLOCKED, isContentAllowed } from '../content-filter.ts';
 
 /**
  * Username rules (docs/SPEC.md section 4): 3-20 chars, a-z 0-9 . _, unique case-insensitively.
@@ -41,7 +42,8 @@ export const usernameSchema = z
       .string()
       .regex(USERNAME_PATTERN, 'Use 3-20 letters, numbers, dots or underscores')
       .refine((s) => !s.includes('..'), 'No two dots in a row')
-      .refine((s) => !isReservedUsername(s), 'That name is reserved'),
+      .refine((s) => !isReservedUsername(s), 'That name is reserved')
+      .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED),
   );
 
 export const countrySchema = z
@@ -79,7 +81,12 @@ export const refreshSchema = z.object({ refreshToken: z.string().min(20).max(256
 
 export const profileCreateSchema = z.object({
   username: usernameSchema,
-  displayName: z.string().trim().max(40).optional(),
+  displayName: z
+    .string()
+    .trim()
+    .max(40)
+    .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED)
+    .optional(),
 });
 export type ProfileCreate = z.infer<typeof profileCreateSchema>;
 

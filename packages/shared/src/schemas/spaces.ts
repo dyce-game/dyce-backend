@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONTENT_BLOCKED, isContentAllowed } from '../content-filter.ts';
 import type { AvatarConfig } from './avatar.ts';
 import type { MatchMode, MatchPlayerResult } from './games.ts';
 
@@ -54,7 +55,12 @@ export const createSpaceSchema = z.object({
     .min(1)
     .max(40)
     .regex(/^[a-z0-9_-]+$/),
-  name: z.string().trim().min(1).max(SPACE_NAME_MAX),
+  name: z
+    .string()
+    .trim()
+    .min(1)
+    .max(SPACE_NAME_MAX)
+    .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED),
   mode: z.enum(['free', 'pool']).default('free'),
   /** Pool only: what each seat pays in kobo. Ignored (0) in Free. */
   seatFeeKobo: z.number().int().min(0).max(1_000_000_000).default(0),

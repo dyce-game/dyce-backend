@@ -2,6 +2,12 @@
 
 One entry per decision, newest first. App-side decisions (ADR-001 stack, 002 avatar system, 003 domain, 006 hoisted node_modules for Metro) are in `Dyce/docs/DECISIONS.md`.
 
+## ADR-045 · Apple review readiness: the objectionable-text filter and the review demo logins · 2026-11-24
+
+Context: a review of the App Store Review Guidelines (`Dyce/docs/APPLE_COMPLIANCE.md`) found that guideline 1.2 requires a filter on what people post (only requests and a thin live-room list existed) and guideline 2.1(a) requires a way for App Review to sign in (it cannot receive an SMS or an email).
+Decision: (1) **`checkContent(text, 'name' | 'message')`** in `@dyce/shared` is enforced by the shared zod schemas, so the server refuses with `validation_failed` and the message `CONTENT_BLOCKED`: usernames, display names, group, space and poll titles (slurs, exploitation terms, calls to self-harm **and** profanity) and chat messages (the first three only: friends may swear). It folds accents, spacing, punctuation, repeated letters and look-alike digits; substring matching is used only for strings that are never part of an ordinary word and whole-word matching for the rest, with a test list of words that must pass (Nigeria, Niger, Scunthorpe, Kikelomo, Pedro, Dickson). The word lists are a **seed** to be extended from reports. Live-room chat keeps its own thinner check in `@dyce/games` (BACKLOG: unify). (2) **`REVIEW_LOGINS`** (up to four `identity=code` pairs, a number or an email, a 6-digit code that is not guessable) lets those identities sign in with a fixed code and sends nothing to them; every limit still applies; the accounts are ordinary; it is allowed in production on purpose and described in the review notes. It is validated at start-up (the API refuses to boot with a malformed value).
+Consequences: unit tests (`content-filter.test.ts`, `review-logins.test.ts`) and PostgreSQL tests (`db/tests/review-login.test.ts`). Names already stored are not re-scanned (BACKLOG). **Needs a human:** the final word lists, the values for `REVIEW_LOGINS` and their rotation after each review. Owner: trust-safety-compliance, auth-onboarding-engineer
+
 ## ADR-044 · Email as a way in: sign up and log in with an emailed code, through Resend · 2026-11-24
 
 Context: sign-in was a phone number and an SMS code only. People without a Nigerian SIM (or who do not want to give a number) had no way in, and SMS is the most expensive and least reliable part of auth. The Welcome and phone screens gain "Sign up with email" and "Log in with email". Migration 0032.

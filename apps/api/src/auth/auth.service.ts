@@ -15,6 +15,7 @@ import { loadNextStep } from '../profile/onboarding.ts';
 import type { SmsProvider } from '../sms/sms-provider.ts';
 import { SmsDeliveryError } from '../sms/sms-provider.ts';
 import { AuthError } from './auth-error.ts';
+import { reviewKey } from './review-logins.ts';
 import {
   generateOtp,
   hashEmail,
@@ -34,6 +35,8 @@ export type AuthConfig = {
   refreshTtlDays: number;
   /** Non-production only: every challenge uses this code and nothing is sent (SMS or email). */
   otpTestCode?: string;
+  /** Demo identities for App Review: `phone:<e164>` or `email:<address>` to a fixed code (review-logins.ts). */
+  reviewCodes?: ReadonlyMap<string, string>;
 };
 
 export const OTP_RESEND_COOLDOWN_SECONDS = 30;
@@ -65,8 +68,8 @@ type UserRow = {
  * names below are fixed strings chosen here, never user input, so they are safe to put in SQL.
  */
 type Identity =
-  | { kind: 'phone'; hash: Buffer; column: 'phone_hash' }
-  | { kind: 'email'; hash: Buffer; column: 'email_hash'; hint: string };
+  | { kind: 'phone'; hash: Buffer; column: 'phone_hash'; key: string }
+  | { kind: 'email'; hash: Buffer; column: 'email_hash'; hint: string; key: string };
 
 /** Who is signed in and how they can sign back in (Settings shows this). */
 export type SignInMethods = { phone: boolean; emailHint: string | null };
@@ -97,6 +100,7 @@ export class AuthService {
         kind: 'phone',
         hash: hashPhone(this.config.phoneSecret, e164),
         column: 'phone_hash',
+        key: reviewKey('phone', e164),
       },
     };
   }
@@ -112,6 +116,7 @@ export class AuthService {
         hash: hashEmail(this.config.phoneSecret, address),
         column: 'email_hash',
         hint: maskEmail(address),
+        key: reviewKey('email', address),
       },
     };
   }
@@ -127,8 +132,10 @@ export class AuthService {
     identity: Identity,
     now: Date,
   ): Promise<{ id: string; code: string; testMode: boolean }> {
-    const testMode = this.config.otpTestCode !== undefined;
-    const code = this.config.otpTestCode ?? generateOtp();
+    // A demo identity for App Review has a fixed code and nothing is sent; everyone else is untouched.
+    const reviewCode = this.config.reviewCodes?.get(identity.key);
+    const testMode = this.config.otpTestCode !== undefined || reviewCode !== undefined;
+    const code = reviewCode ?? this.config.otpTestCode ?? generateOtp();
     const id = randomUUID();
     const col = identity.column;
 

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { parseReviewLogins } from '../auth/review-logins.ts';
 
 /** Treat empty strings (a blank line in .env) as "not set". */
 const optional = <T extends z.ZodType>(schema: T) =>
@@ -22,6 +23,12 @@ export const envSchema = z
     OTP_TTL_SECONDS: positiveInt(300),
     /** Non-production only: fixed 6-digit code, no SMS sent. For Maestro and local development. */
     OTP_TEST_CODE: optional(z.string().regex(/^\d{6}$/, 'OTP_TEST_CODE must be 6 digits')),
+    /**
+     * Demo accounts for Apple and Google review: `+2348012345678=482913;review@mail.dyce.games=739104`. Those
+     * identities accept their own fixed code and nothing is sent to them. Allowed in production on purpose; see
+     * auth/review-logins.ts and docs/APP_REVIEW_NOTES.md.
+     */
+    REVIEW_LOGINS: optional(z.string().max(400)),
     /** "console" prints codes (masked number) to the log; "real" sends through Termii/Twilio. */
     SMS_DRIVER: z.enum(['console', 'real']).default('console'),
     /** Email sign-in and sign-up (ADR-044). Off = the email routes answer 404 and the app hides the option. */
@@ -112,6 +119,8 @@ export const envSchema = z
         );
       }
     }
+    for (const problem of parseReviewLogins(env.REVIEW_LOGINS).errors)
+      fail('REVIEW_LOGINS', problem);
     if (env.ADMIN_TOKENS && !env.ADMIN_DATABASE_URL) {
       fail(
         'ADMIN_DATABASE_URL',

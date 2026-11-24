@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONTENT_BLOCKED, isContentAllowed } from '../content-filter.ts';
 import { BOT_SLUGS } from '../bots.ts';
 import type { PublicUser } from './contacts.ts';
 import type { GroupRole, ReactionKey } from './messages.ts';
@@ -11,7 +12,12 @@ export const MAX_GROUP_TITLE_LENGTH = 40;
 /** How long after sending you can delete a message for everyone. */
 export const DELETE_FOR_EVERYONE_MINUTES = 15;
 
-const titleSchema = z.string().trim().min(1).max(MAX_GROUP_TITLE_LENGTH);
+const titleSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(MAX_GROUP_TITLE_LENGTH)
+  .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED);
 
 /** The client picks the conversation id, so a retried "Create" can't make two groups. */
 export const createGroupSchema = z.object({
@@ -60,9 +66,21 @@ export const MAX_POLL_OPTION_LENGTH = 60;
 export const createPollSchema = z.object({
   /** The message id, chosen by the client so a retry can't post it twice. */
   id: z.uuid(),
-  question: z.string().trim().min(1).max(MAX_POLL_QUESTION_LENGTH),
+  question: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_POLL_QUESTION_LENGTH)
+    .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED),
   options: z
-    .array(z.string().trim().min(1).max(MAX_POLL_OPTION_LENGTH))
+    .array(
+      z
+        .string()
+        .trim()
+        .min(1)
+        .max(MAX_POLL_OPTION_LENGTH)
+        .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED),
+    )
     .min(MIN_POLL_OPTIONS)
     .max(MAX_POLL_OPTIONS),
 });

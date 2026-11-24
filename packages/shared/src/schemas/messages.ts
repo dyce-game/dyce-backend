@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONTENT_BLOCKED, isContentAllowed } from '../content-filter.ts';
 import type { PublicUser } from './contacts.ts';
 import type { GameCardPayload, MatchView } from './games.ts';
 import type { SpaceView } from './spaces.ts';
@@ -19,7 +20,12 @@ export type OpenDirectRequest = z.infer<typeof openDirectSchema>;
  */
 export const sendMessageSchema = z.object({
   id: z.uuid(),
-  body: z.string().trim().min(1).max(MAX_MESSAGE_LENGTH),
+  body: z
+    .string()
+    .trim()
+    .min(1)
+    .max(MAX_MESSAGE_LENGTH)
+    .refine((s) => isContentAllowed(s, 'message'), CONTENT_BLOCKED),
   /** The message this one answers (it must be in the same conversation). */
   replyTo: z.uuid().optional(),
 });

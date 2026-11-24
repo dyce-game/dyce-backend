@@ -138,6 +138,12 @@ Product-level deferrals (tournaments, voice/video in Spaces, real-money anything
 - Per-instance rate-limit counters (ARCHITECTURE: needs Redis with more than one API instance); the per-address limit still applies to anonymous routes.
 
 
+## Apple review follow-ups (deferred from ADR-045)
+- Unify the live-room text check (`isCleanText` in `@dyce/games`) with the shared filter, and grow both lists from real reports.
+- Re-scan stored usernames, display names and group titles with the filter once, and queue the hits for moderation.
+- Rate and measure: a "this was filtered" count (without the text) for the moderation dashboard.
+- Report from the live table menu (the Space lobby has it).
+
 ## Email sign-in follow-ups (deferred from ADR-044)
 - **Resend webhooks:** read bounces and complaints, and stop sending to an address that bounced or complained; today it is a weekly look at the Resend dashboard.
 - Block disposable-email domains (a list, or Resend's own checks) if sign-up abuse appears.

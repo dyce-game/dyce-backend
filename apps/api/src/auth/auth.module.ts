@@ -14,6 +14,7 @@ import type { EmailProvider } from '../email/email-provider.ts';
 import { AuthController, IdentityController } from './auth.controller.ts';
 import { AuthGuard } from './auth.guard.ts';
 import { AuthService } from './auth.service.ts';
+import { parseReviewLogins } from './review-logins.ts';
 import { TokenService } from './tokens.ts';
 
 const SMS_PROVIDER = Symbol('SMS_PROVIDER');
@@ -77,6 +78,7 @@ export class AuthMaintenance {
             otpTtlSeconds: env.OTP_TTL_SECONDS,
             refreshTtlDays: env.REFRESH_TTL_DAYS,
             otpTestCode: env.OTP_TEST_CODE,
+            reviewCodes: parseReviewLogins(env.REVIEW_LOGINS).codes,
           },
           () => new Date(),
           { warn: (m) => log.warn(m) },
