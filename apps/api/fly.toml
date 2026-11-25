@@ -65,13 +65,9 @@ min_machines_running = 1
     timeout = '5s'
     grace_period = '30s'
 
-# Migrations are NOT run automatically on deploy: RUNBOOK section 3 takes a backup point first and runs them with the
-# owner role. Run them by hand (deploy/FLY.md section 5). If you accept running them on every deploy (staging, say),
-# add:
-#
-#   [deploy]
-#     release_command = 'node db/migrate.ts'   # needs DATABASE_URL to be the OWNER role's URL for this one command
-#     strategy = 'rolling'
+# Migrations are NOT run automatically in production: the runbook takes a backup point first. Run them by hand
+# (deploy/FLY.md section 5); the GitHub deploy workflow refuses a production release that carries a migration until you
+# say you did. STAGING runs them on every deploy (apps/api/fly.staging.toml has the [deploy] block).
 
 [[vm]]
 size = 'shared-cpu-1x'

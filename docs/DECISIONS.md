@@ -2,6 +2,12 @@
 
 One entry per decision, newest first. App-side decisions (ADR-001 stack, 002 avatar system, 003 domain, 006 hoisted node_modules for Metro) are in `Dyce/docs/DECISIONS.md`.
 
+## ADR-047 · Deploying to Fly.io from GitHub: two branches, two environments · 2026-11-25
+
+Context: the app has a two-branch pipeline (staging, main) and the backend had only CI and a manual image build. The Fly files exist (`fly.toml`, `deploy/FLY.md`) but nothing deployed them.
+Decision: `.github/workflows/deploy-fly.yml`. A push to **`staging`** deploys the staging Fly apps; a push to **`main`** deploys the production apps after **a named approval** (the `production` GitHub environment). Both run CI first (`ci.yml` is now called by the deploy and no longer triggers on push, so a merge is tested once), then the game server, then the API, then check that `/health/ready` reports the commit that was pushed. **Staging migrates automatically** (`release_command = 'node db/migrate.ts'`, which now prefers `MIGRATION_DATABASE_URL`, the owner role); **production never does**: the runbook's backup point comes first, and the workflow refuses a production release that adds a migration until a person confirms (a manual run with `migrations_applied`). One deploy token per Fly app, so a token cannot reach another environment; nothing deploys until the repository variable `FLY_DEPLOY` is `true`.
+Consequences: the plan logic was simulated for each branch and input and the YAML validated; the workflow has **never run on GitHub**, there are no Fly apps or tokens yet, and `fly config validate` was not run (no flyctl here). The game server is deployed first so the API never points at an older game server, at the cost of a restart that forfeits live Pool matches. Owner: release-engineer
+
 ## ADR-046 · Dyce Cash is shown with the sign Ð, not the naira sign · 2026-11-24
 
 Context: the Apple review (`Dyce/docs/APPLE_COMPLIANCE.md`, decision D2) found that a naira sign on a virtual currency can read as real money to a reviewer or a regulator (guidelines 2.3.1, 3.1.1 and 5.3). The product owner chose the sign **Ð**.

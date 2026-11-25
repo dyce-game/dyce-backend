@@ -1,9 +1,12 @@
 name: CI
 
+# Runs on every pull request into `staging` or `main`, and is CALLED by deploy-fly.yml after a merge, so a merge is tested
+# once and the deploy only starts when it passes.
 on:
   pull_request:
-  push:
-    branches: [main]
+    branches: [staging, main]
+  workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read

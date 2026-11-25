@@ -1,0 +1,175 @@
+name: Deploy to Fly.io
+
+# Two branches, two environments (the same model as the app: Dyce docs/CI_CD.md):
+#   staging  ->  the STAGING Fly apps  (dyce-backend-staging, dyce-game-server-staging)   migrations run automatically
+#   main     ->  the PRODUCTION Fly apps (dyce-backend, dyce-game-server)                  a person approves; no automatic migrations
+#
+# A merge (push) runs CI (ci.yml) first. Only then: the game server is deployed, then the API, then each is checked to be
+# serving THIS commit. Configuration: apps/*/fly.toml (production) and apps/*/fly.staging.toml; how to set it all up:
+# deploy/FLY.md section 7.
+#
+# Nothing deploys until the repository variable FLY_DEPLOY is "true" (so merging before the Fly accounts and secrets exist
+# is harmless: CI runs, the deploy jobs are skipped).
+on:
+  push:
+    branches: [staging, main]
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
+      - '.claude/**'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Where to deploy
+        type: choice
+        options: [staging, production]
+        default: staging
+      service:
+        description: What to deploy (the game server is always first)
+        type: choice
+        options: [all, game-server, api]
+        default: all
+      migrations_applied:
+        description: PRODUCTION ONLY. The database is migrated for this commit (I took a backup point and ran them, or there are none)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+# One deploy per environment at a time; a second merge waits instead of racing the first.
+concurrency:
+  group: fly-${{ github.event.inputs.environment || (github.ref_name == 'main' && 'production' || 'staging') }}
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    outputs:
+      env: ${{ steps.p.outputs.env }}
+      suffix: ${{ steps.p.outputs.suffix }}
+      api_app: ${{ steps.p.outputs.api_app }}
+      game_app: ${{ steps.p.outputs.game_app }}
+      api: ${{ steps.p.outputs.api }}
+      game: ${{ steps.p.outputs.game }}
+    steps:
+      - id: p
+        env:
+          INPUT_ENV: ${{ github.event.inputs.environment }}
+          INPUT_SERVICE: ${{ github.event.inputs.service }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          env="${INPUT_ENV:-}"
+          if [ -z "$env" ]; then if [ "$REF_NAME" = "main" ]; then env=production; else env=staging; fi; fi
+          if [ "$env" = "production" ] && [ "$REF_NAME" != "main" ]; then
+            echo "::error::Production is deployed from the main branch only (this run is on '$REF_NAME')."; exit 1
+          fi
+          if [ "$env" = "staging" ] && [ "$REF_NAME" != "staging" ] && [ "$REF_NAME" != "main" ]; then
+            echo "::error::Staging is deployed from the staging or main branch (this run is on '$REF_NAME')."; exit 1
+          fi
+          service="${INPUT_SERVICE:-all}"
+          if [ "$env" = "production" ]; then suffix=""; api_app=dyce-backend; game_app=dyce-game-server
+          else suffix=".staging"; api_app=dyce-backend-staging; game_app=dyce-game-server-staging; fi
+          {
+            echo "env=$env"; echo "suffix=$suffix"; echo "api_app=$api_app"; echo "game_app=$game_app"
+            echo "api=$([ "$service" = all ] || [ "$service" = api ] && echo true || echo false)"
+            echo "game=$([ "$service" = all ] || [ "$service" = game-server ] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+          echo "Deploying **$service** to **$env** from \`$REF_NAME\` (${GITHUB_SHA::7})" >> "$GITHUB_STEP_SUMMARY"
+
+  ci:
+    name: CI
+    needs: plan
+    uses: ./.github/workflows/ci.yml
+
+  deploy-game:
+    name: Game server
+    needs: [plan, ci]
+    if: ${{ vars.FLY_DEPLOY == 'true' && needs.plan.outputs.game == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.env }} # production has required reviewers: that is the approval step
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_GAME }}
+      APP: ${{ needs.plan.outputs.game_app }}
+      CONFIG: apps/game-server/fly${{ needs.plan.outputs.suffix }}.toml
+    steps:
+      - name: Say so if the token is missing
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then echo "::error::The FLY_API_TOKEN_GAME secret is missing from the '${{ needs.plan.outputs.env }}' environment (deploy/FLY.md section 7)."; exit 1; fi
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      # A restart forfeits every live Pool match (Dyce docs/RUNBOOK.md section 8): the summary reminds whoever approved.
+      - name: Deploy
+        run: >
+          flyctl deploy --config "$CONFIG" --dockerfile apps/game-server/Dockerfile --remote-only
+          --build-arg RELEASE=${GITHUB_SHA::12}
+      - name: It is serving this commit
+        run: |
+          for i in $(seq 1 24); do
+            out="$(curl -fsS --max-time 10 "https://${APP}.fly.dev/health/ready" || true)"
+            if echo "$out" | grep -q "${GITHUB_SHA::12}"; then echo "$APP serves ${GITHUB_SHA::12}"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::$APP is not serving ${GITHUB_SHA::12} after 4 minutes (last answer: $out)"; exit 1
+
+  deploy-api:
+    name: API
+    needs: [plan, ci, deploy-game]
+    # The game server may be skipped (service = api) but must not have failed.
+    if: ${{ !cancelled() && vars.FLY_DEPLOY == 'true' && needs.plan.outputs.api == 'true' && needs.ci.result == 'success' && needs.deploy-game.result != 'failure' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: ${{ needs.plan.outputs.env }}
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API }}
+      APP: ${{ needs.plan.outputs.api_app }}
+      CONFIG: apps/api/fly${{ needs.plan.outputs.suffix }}.toml
+      ENVIRONMENT: ${{ needs.plan.outputs.env }}
+      MIGRATIONS_APPLIED: ${{ github.event.inputs.migrations_applied }}
+    steps:
+      - name: Say so if the token is missing
+        run: |
+          if [ -z "$FLY_API_TOKEN" ]; then echo "::error::The FLY_API_TOKEN_API secret is missing from the '$ENVIRONMENT' environment (deploy/FLY.md section 7)."; exit 1; fi
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      # Production never migrates by itself: the runbook takes a backup point first. If this release carries a new
+      # migration, stop until a person says they ran it. (Staging runs them in Fly's release_command.)
+      - name: 'Production: refuse a release with unapplied migrations'
+        if: ${{ env.ENVIRONMENT == 'production' }}
+        env:
+          BEFORE: ${{ github.event.before }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" = "workflow_dispatch" ]; then
+            if [ "$MIGRATIONS_APPLIED" = "true" ]; then echo "The person who started this run confirmed the database is migrated."; exit 0; fi
+            echo "::error::A manual production deploy must tick 'migrations_applied' (the database is migrated for this commit, or it has nothing to migrate). deploy/FLY.md section 5."
+            exit 1
+          fi
+          new=""
+          if [ -n "$BEFORE" ] && ! echo "$BEFORE" | grep -Eq '^0+$'; then
+            new="$(git diff --name-only "$BEFORE" "$GITHUB_SHA" -- apps/api/db/migrations || true)"
+          fi
+          if [ -n "$new" ]; then
+            echo "::error::This release carries migrations ($new). Take a backup point and run them (deploy/FLY.md section 5), then use 'Run workflow' on main with environment=production and migrations_applied ticked."
+            exit 1
+          fi
+          echo "No new migrations in this release."
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy
+        run: >
+          flyctl deploy --config "$CONFIG" --dockerfile apps/api/Dockerfile --remote-only
+          --build-arg RELEASE=${GITHUB_SHA::12}
+      - name: It is serving this commit, and the database is reachable
+        run: |
+          for i in $(seq 1 24); do
+            out="$(curl -fsS --max-time 10 "https://${APP}.fly.dev/health/ready" || true)"
+            if echo "$out" | grep -q "${GITHUB_SHA::12}" && echo "$out" | grep -q '"db":"up"'; then echo "$APP serves ${GITHUB_SHA::12}"; exit 0; fi
+            sleep 10
+          done
+          echo "::error::$APP is not ready on ${GITHUB_SHA::12} after 4 minutes (last answer: $out)"; exit 1
+      - name: Record it
+        run: echo "API ($APP) and the game server now run ${GITHUB_SHA::12} in $ENVIRONMENT. Pin the app's BACKEND_REF_PRODUCTION to this commit if this is production." >> "$GITHUB_STEP_SUMMARY"
