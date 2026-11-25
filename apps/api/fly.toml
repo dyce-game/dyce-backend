@@ -1,22 +1,78 @@
-# fly.toml app configuration file generated for dyce-backend on 2026-11-16T11:49:13Z
+# Fly.io configuration for the Dyce API (NestJS). Replaces the file `fly launch` generated on 2026-11-16, which assumed
+# a single-package app: this repository is a pnpm workspace, so the BUILD CONTEXT MUST BE THE REPOSITORY ROOT.
 #
-# See https://docs.fly.io/reference/configuration for information about how to use this file.
+# Deploy (from the repository root, not from apps/api):
 #
+#   fly deploy --config apps/api/fly.toml --dockerfile apps/api/Dockerfile --remote-only \
+#              --build-arg RELEASE=$(git rev-parse --short=12 HEAD)
+#
+# `--config` only chooses this file; the context is the directory you run the command in. The Dockerfile is given on the
+# command line (not under [build]) so that its path is relative to that same directory with no guessing.
+# Full steps, secrets, migrations, domains and rollback: deploy/FLY.md.
 
 app = 'dyce-backend'
-primary_region = 'ams'
+primary_region = 'ams' # keep it next to the PostgreSQL database (a network round trip per query otherwise)
+
+# Graceful shutdown (apps/api/src/main.ts): on SIGTERM the API answers 503 on /health/ready for SHUTDOWN_DRAIN_MS, closes
+# HTTP, WebSockets and the database pool, and exits. Fly sends SIGINT by default and waits 5 seconds, which cuts it off.
+kill_signal = 'SIGTERM'
+kill_timeout = 40 # seconds: more than SHUTDOWN_DRAIN_MS (5s) + SHUTDOWN_TIMEOUT_MS (25s)
 
 [build]
+# Intentionally empty: see the deploy command above.
+
+[env]
+# Non-secret settings only. Everything secret is set with `fly secrets set` (deploy/FLY.md section 3).
+NODE_ENV = 'production'
+PORT = '3000'
+LOG_FORMAT = 'json'
+SHUTDOWN_DRAIN_MS = '5000'
+SHUTDOWN_TIMEOUT_MS = '25000'
+# One proxy (Fly's edge) sits in front of the API: its client address is the real one. Wrong value = rate limits
+# apply to the proxy instead of the person.
+TRUST_PROXY_HOPS = '1'
+SMS_DRIVER = 'real'
+EMAIL_DRIVER = 'resend'
+PUSH_DRIVER = 'expo'
+INTEGRITY_DRIVER = 'store' # Pool entry fails closed until the device checks are written (RELEASE_CHECKLIST L6)
+INVITE_BASE_URL = 'https://dyce.games'
+# The game server is a second Fly app on the private network; the public address is what the phones connect to.
+GAME_SERVER_URL = 'http://dyce-game-server.internal:2567'
+GAME_SERVER_PUBLIC_URL = 'wss://game.dyce.games'
+CORS_ORIGINS = 'https://dyce.games'
+
 [http_service]
-  internal_port = 8080
-  force_https = true
-  auto_stop_machines = 'stop'
-  auto_start_machines = true
-  min_machines_running = 0
-  processes = ['app']
+internal_port = 3000
+force_https = true
+# The API runs timers (the nightly ledger check, session clean-up, push jobs) and holds the live chat hub in memory,
+# so it must never be stopped for being idle, and there must be exactly ONE machine until the hub moves to Redis
+# (Dyce docs/RUNBOOK.md section 12).
+auto_stop_machines = 'off'
+auto_start_machines = true
+min_machines_running = 1
+
+  [http_service.concurrency]
+  type = 'requests'
+  soft_limit = 200
+  hard_limit = 400
+
+  # Routing check: Fly stops sending traffic to a machine that is not ready (or is draining) but does not restart it.
+  # Readiness includes the database; liveness (used by the Docker HEALTHCHECK) never does.
+  [[http_service.checks]]
+    method = 'GET'
+    path = '/health/ready'
+    interval = '15s'
+    timeout = '5s'
+    grace_period = '30s'
+
+# Migrations are NOT run automatically on deploy: RUNBOOK section 3 takes a backup point first and runs them with the
+# owner role. Run them by hand (deploy/FLY.md section 5). If you accept running them on every deploy (staging, say),
+# add:
+#
+#   [deploy]
+#     release_command = 'node db/migrate.ts'   # needs DATABASE_URL to be the OWNER role's URL for this one command
+#     strategy = 'rolling'
 
 [[vm]]
-  memory = '1gb'
-  cpu_kind = 'shared'
-  cpus = 1
-  memory_mb = 256
+size = 'shared-cpu-1x'
+memory = '1gb' # the generated file also set memory_mb = 256, which contradicts this and is not a documented key
