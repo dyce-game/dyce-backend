@@ -9,6 +9,11 @@ export type HarnessOptions<S, A, Cfg> = {
   candidates: (s: S, by: PlayerId) => A[];
   /** Actions that must always be rejected (or that are rejected in this state). Optional. */
   illegal?: (s: S, by: PlayerId) => A[];
+  /**
+   * Actions only the room may send (timer ticks, phase advances), each with the actor it is sent as.
+   * They join the pool the harness picks from, so timeouts and phase changes are exercised too.
+   */
+  systemActions?: (s: S) => { by: PlayerId; action: A }[];
   maxSteps?: number;
   numRuns?: number;
 };
@@ -34,10 +39,29 @@ function play<S, A, Cfg>(
     for (const a of actors) {
       if (!players.includes(a)) throw new Error(`currentPlayers returned unknown player ${a}`);
     }
-    const by = actors[(picks[i] ?? 0) % actors.length]!;
-    const legal = opts.candidates(s, by).filter((a) => engine.validate(s, by, a).ok);
-    if (legal.length === 0) throw new Error(`No legal action for ${by} in a non-terminal state`);
-    const action = legal[(picks[i + 1] ?? 0) % legal.length]!;
+    let by: PlayerId;
+    let action: A;
+    const system = (opts.systemActions?.(s) ?? []).filter(
+      (x) => engine.validate(s, x.by, x.action).ok,
+    );
+    // A system action is picked for about one step in five, so phases mostly end on player actions.
+    if (system.length > 0 && (picks[i] ?? 0) % 5 === 0) {
+      const pick = system[(picks[i + 1] ?? 0) % system.length]!;
+      by = pick.by;
+      action = pick.action;
+    } else {
+      by = actors[(picks[i] ?? 0) % actors.length]!;
+      const legal = opts.candidates(s, by).filter((a) => engine.validate(s, by, a).ok);
+      if (legal.length > 0) {
+        action = legal[(picks[i + 1] ?? 0) % legal.length]!;
+      } else if (system.length > 0) {
+        const pick = system[(picks[i + 1] ?? 0) % system.length]!;
+        by = pick.by;
+        action = pick.action;
+      } else {
+        throw new Error(`No legal action for ${by} in a non-terminal state`);
+      }
+    }
 
     const before = stableStringify(s);
     const next = engine.apply(s, by, action);

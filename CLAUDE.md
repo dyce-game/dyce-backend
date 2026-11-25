@@ -1,6 +1,6 @@
 # dyce-backend — project rules for Claude Code
 
-This is the **backend** of Dyce, a chat-first mobile app for playing games with friends, family and strangers (Nigeria first; every user starts with **₦200k Dyce Cash**, virtual). The Expo app lives in the sibling repo `../Dyce`; product docs, the build plan and the design are there too.
+This is the **backend** of Dyce, a chat-first mobile app for playing games with friends, family and strangers (Nigeria first; every user starts with **Ð200k Dyce Cash**, virtual). The Expo app lives in the sibling repo `../Dyce`; product docs, the build plan and the design are there too.
 
 Source of truth, in this order (read the relevant ones before changing anything):
 
@@ -15,7 +15,7 @@ If the docs and the design disagree, the docs win. If the docs are silent, pick 
 ## What is in this repo
 ```
 apps/api            NestJS API (REST + WebSocket /realtime) on PostgreSQL. SQL migrations in db/migrations, tests in db/tests
-apps/game-server    Colyseus realtime game server (not started)
+apps/game-server    Colyseus realtime game server: one room per live match (Whot! first, ADR-022)
 packages/shared     zod schemas, money + formatting utils, query keys, config. Linked by the app
 packages/games      Pure TypeScript rules engines + the GameEngine contract. Linked by the app
 ```

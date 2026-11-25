@@ -5,6 +5,7 @@
 > **Superseded in part by ADR-004 (see `docs/DECISIONS.md`).** The backend is a **NestJS API (`apps/api`) on plain PostgreSQL with SQL migrations**, not Supabase. Where this document says Supabase / Edge Function / RLS / Realtime / pgTAP, read the mapping in `CLAUDE.md`. The data model in §3, the engine contract in §4, the match flows in §5 and the fairness rules in §6 are unchanged. Auth is NestJS-issued JWT; chat realtime is a NestJS WebSocket gateway; Colyseus verifies the same JWT.
 
 ## 1. System overview
+
 ```
  Expo app (iOS / Android / web-guest)
    │  supabase-js (auth, queries, RPC, realtime chat)      colyseus.js (live rooms)
@@ -18,24 +19,30 @@
      invites, QR requests, push fan-out, contact match
  Expo Push Service ← Edge Function `push-dispatch`
 ```
+
 Hosting: Supabase cloud (pick the region closest to Lagos that Supabase offers, currently EU), Colyseus on Fly.io (regions close to West Africa and EU), web guest on EAS Hosting or Vercel at `dyce.games`.
 
 ## 2. Repo
+
 Dyce is two projects (ADR-011). **This repo (`dyce-backend`)** holds everything server-side and everything the app and the server must agree on:
+
 ```
 apps/api/                  NestJS API (REST + WebSocket at /realtime) on PostgreSQL
   src/<auth|profile|social|chat|ledger|sms|common|config|db|health>/
   db/migrations/           plain SQL migrations (run in order by db/migrator.ts)
   db/tests/                Jest integration tests against a real PostgreSQL
   scripts/                 dev-db.mjs (embedded Postgres), smoke.mjs, auth-e2e.mjs (HTTP journey)
-apps/game-server/          Colyseus rooms (not started): SpaceRoom, PartyRoom, CardRoom, LudoRoom
+apps/game-server/          Colyseus game server (ADR-022): one generic `live` room per match, built from the match row (Whot! today; party and Ludo rooms later)
 packages/games/src/<slug>/ engine.ts + tests, plus contract.ts, rng.ts, physics/   (pure, deterministic)
 packages/shared/src/       schemas/ (zod), money.ts, format.ts, queryKeys.ts, config.ts, phone.ts, ...
 ```
+
 **The Expo app** lives in the sibling `Dyce` repo (`app/`, `src/features/*`, `src/game-renderers/*`, `packages/ui`). It links to `packages/shared` and `packages/games` here by path (`link:../dyce-backend/packages/...`), so there is one copy of the contracts and the rules engines. Both folders must be checked out side by side. Paths in the sections below that start with `apps/mobile`, `packages/ui` or `supabase/` describe the app or the pre-ADR-004 layout.
 
 ## 3. Data model (Postgres, schema `public`; RLS on all tables)
+
 Identity and social
+
 - `profiles(id uuid pk = auth.uid, username citext unique, display_name, avatar jsonb, level int, xp int, is_adult bool default false, birth_year int, city text null, show_online bool, request_policy enum(everyone, fof, nobody), created_at, last_seen_at)`
 - `phone_hashes(user_id, hash bytea unique)` — salted HMAC of E.164; salt is a server secret.
 - `contact_links(owner_id, contact_user_id, created_at)` — result of contact matching.
@@ -43,13 +50,15 @@ Identity and social
 - `blocks(blocker_id, blocked_id)`, `reports(id, reporter_id, target_user_id, conversation_id, message_id, reason, note, status, created_at)`
 
 Messaging
-- `conversations(id, kind enum(direct, group, bot, sms), title, photo_url, created_by, created_at, last_message_at)`
-- `conversation_members(conversation_id, user_id, role enum(member, admin), state enum(active, request, declined, left), last_read_at, muted_until)` — `state = request` is how stranger messages stay in Requests.
+
+- `conversations(id, kind enum(direct, group, bot, sms), title, photo_url, bot_slug, created_by, created_at, last_message_at)` — groups need a title (CHECK), bots a `bot_slug` (one per person per bot); ADR-038.
+- `conversation_members(conversation_id, user_id, role enum(member, admin), state enum(active, request, declined, left), last_read_at, muted_until, joined_at)` — `joined_at` limits a group member's history; `left` covers leaving and removal. — `state = request` is how stranger messages stay in Requests.
 - `messages(id, conversation_id, sender_id, kind enum(text, voice, image, game, money_sent, money_request, poll, system, sms_invite), body text, payload jsonb, reply_to uuid, created_at, edited_at, deleted_at)`
 - `reactions(message_id, user_id, emoji text)` (reaction set is a fixed list, rendered as icons)
-- `sms_invites(id, inviter_id, phone_hash, game_slug, match_id, token unique, status enum(sent, opened, played, joined), created_at)`
+- `sms_invites(id, inviter_id, phone_hash, game_slug, match_id, token unique, status enum(sent, opened, played, joined), created_at, expires_at, opened_at, played_at, joined_at, joined_user_id)`; `guest_runs(id, invite_id unique, token_hash, game_slug, seed, state jsonb, moves jsonb, run_state, expires_at, finished_at)` is the guest's browser round (ADR-021)
 
 Games
+
 - `games(slug pk, name, dimension enum('2d','3d'), sync enum(async, live), min_players, max_players, categories text[], supports_pool bool, thumbnail_video_path, poster_path, enabled bool)`
 - `matches(id, game_slug, mode enum(free, pool), stake_kobo bigint, status enum(invited, countered, active, finished, expired, cancelled, disputed), conversation_id, space_id, seed bigint, state jsonb, state_version int, current_turn uuid, turn_deadline timestamptz, created_by, created_at, finished_at)`
 - `match_players(match_id, user_id, seat int, accepted_at, result enum(win, loss, draw, forfeit), placement int, payout_kobo bigint)`
@@ -58,60 +67,82 @@ Games
 - `space_members(space_id, user_id, seat, ready bool, joined_at, left_at, removed bool)`
 
 Progress
+
 - `xp_events(id, user_id, amount, reason, match_id, created_at)`, `streaks(user_id, current, best, last_win_date, saver_expires_at)`, `badges(slug, name, description, icon)`, `user_badges(user_id, badge_slug, earned_at)`
 - `leaderboard_weekly` materialized view (refreshed by pg_cron every 10 min).
 
 Money (details in WALLET_AND_QR.md)
+
 - `ledger_accounts`, `ledger_txns`, `ledger_entries`, `wallets` (cached balance), `payment_requests`, `pool_escrows`, `disputes`, `daily_usage`.
 
 Platform
+
 - `push_tokens(user_id, token, platform, updated_at)`, `notifications(id, user_id, kind, payload, read_at, created_at)`, `app_config(key pk, value jsonb)` (limits, feature flags, payout schemes).
 
 RLS sketch: users read their own profile row in full and other profiles' public columns via a `public_profiles` view; conversation data readable only by active members (request members read only the first message + sender profile); no client inserts into `matches`, `match_*`, ledger tables, `payment_requests` — those go through functions.
 
 ## 4. Game engine contract (`packages/games/src/contract.ts`)
+
 ```ts
 export interface GameEngine<S, A, Cfg = unknown> {
   slug: string;
-  init(players: PlayerId[], seed: bigint, cfg: Cfg): S;          // deterministic
-  currentPlayers(s: S): PlayerId[];                               // who may act now
+  init(players: PlayerId[], seed: bigint, cfg: Cfg): S; // deterministic
+  currentPlayers(s: S): PlayerId[]; // who may act now
   validate(s: S, by: PlayerId, a: A): { ok: true } | { ok: false; code: string };
-  apply(s: S, by: PlayerId, a: A): S;                             // pure, never mutates input
+  apply(s: S, by: PlayerId, a: A): S; // pure, never mutates input
   isTerminal(s: S): boolean;
-  result(s: S): { placements: PlayerId[][]; draw: boolean };     // index 0 = winners
-  view(s: S, viewer: PlayerId | 'spectator'): unknown;            // hides secret info (cards, ships, roles, words)
+  result(s: S): { placements: PlayerId[][]; draw: boolean }; // index 0 = winners
+  view(s: S, viewer: PlayerId | 'spectator'): unknown; // hides secret info (cards, ships, roles, words)
   timers?: { turnMs: number; matchMs?: number };
 }
 ```
+
 Rules: pure TS, no `Date.now()`/`Math.random()` (use `rng.ts`, seeded xoshiro128** from the match seed), JSON-serialisable state, actions validated by zod. Hidden information is never sent to a client except through `view()`.
 
 ## 5. Two ways a match runs
+
 **Async (iMessage-style, turn-based, 1v1, most games).** The game lives in a chat as a card. A move = call Edge Function `submit-move { matchId, expectedVersion, action }` → loads match, checks the caller is a current player, `validate` → `apply` → writes `match_moves` + new `state` + `state_version+1` inside a transaction (optimistic concurrency on version) → if terminal, calls `settle_match()` (SQL) → posts a system message to the conversation → push to the next player. Clients subscribe to the match row via Realtime for live updates when both are online.
 
-*Implemented (ADR-016):* NestJS `MatchesService` (`apps/api/src/matches`): `GET /games`, `POST /matches`, `GET /matches/:id`, `POST /matches/:id/accept|decline|cancel|moves`. The "Edge Function" is the `moves` route; each player gets their own `MatchView` (engine `view()`) in responses and in the `match` realtime event, and the chat card (message kind `game`, id = match id) is rewritten as the match moves.
+_Implemented (ADR-016):_ NestJS `MatchesService` (`apps/api/src/matches`): `GET /games`, `POST /matches`, `GET /matches/:id`, `POST /matches/:id/accept|decline|cancel|moves`. The "Edge Function" is the `moves` route; each player gets their own `MatchView` (engine `view()`) in responses and in the `match` realtime event, and the chat card (message kind `game`, id = match id) is rewritten as the match moves.
 
 **Live (Colyseus).** Spaces and real-time games (Doodle Guess, Werewolf, Imposter, Charades, Crazy Cards, Whot, Ludo with 3–4 players). The room is created by Edge Function `start-space` which creates the `matches` row and asks game-server to create a room (signed server-to-server call). Clients join with their Supabase JWT; the room verifies it. The room holds state in memory, uses the same engine, broadcasts `view()` per client, persists moves in batches, and on end calls `settle_match()` with the service role. Reconnection window 60s; after that the seat forfeits (Pool) or is replaced by a bot (Free, optional).
 
+*Implemented (ADR-022):* Spaces are NestJS endpoints (`/spaces`: create, lookup, join by code, leave, remove, close, start, connect); `start` initialises the engine, flips the match to `active` and calls the game server's signed `POST /internal/rooms`. The room (`apps/game-server`) verifies the API's JWT, persists every move, sends each seat its own `LiveState`, forfeits a seat after 60 s offline or on `leave` (Free and Pool alike), and settles through `settle_match` in the transaction that finishes the match. The room is a cache of the match row and is rebuilt from it after a restart.
+
+*Implemented (ADR-025):* the same room serves two kinds of game. Turn rooms (Whot!, Crazy Cards) are `LiveMatch`; party rooms (Imposter, Werewolf, Charades, Doodle Guess) are `PartyMatch`, which feeds the engines `tick` actions as real time passes, starts its clocks when every seat has connected, sends each seat only what changed in its own view, streams the Doodle canvas as deltas, and keeps a small table talk channel. Quick match (`/quick-match`) pairs two strangers, escrows their stakes at the match and opens a hidden two-seat Space. The messages are in `docs/PARTY_ROOM_PROTOCOL.md`.
+
 ## 6. Physics games and fairness
+
 Cup Pong, 8 Ball, Mini Golf, Basketball, Archery, Darts, Tanks. The client sends **input only** (e.g. `{ angle, power, spin }` or a swipe vector, quantised to fixed precision). Both client and server run the same **deterministic** simulation in `packages/games/src/physics` (fixed timestep 1/120s, fixed-point or carefully ordered float math, no platform-dependent functions). The server's result is final. The client animates its own prediction and corrects if the server disagrees (rare). Wind/jitter values come from the seeded RNG. Physics library options: a small custom 2D/2.5D sim (preferred for table/target games) or Rapier's deterministic build; whichever is chosen, add a cross-runtime determinism test (same inputs → identical outcome hash in Node, Deno and Hermes).
 
 ## 7. Rendering
+
 - 2D games: Skia canvas inside the game host screen, 60fps, Reanimated for gestures.
 - 3D games: R3F `<Canvas>` from `@react-three/fiber/native`. Low-poly GLB assets (glTF, Draco/meshopt compressed, KTX2 textures when supported), baked lighting, max ~50k triangles per scene, `frameloop="demand"` when idle. Mid-range Android (e.g. 3–4 GB RAM devices common in Nigeria) is the performance target: 50+ fps.
 - Game host screen (`g/[matchId]`) provides the shared shell: top bar (back to chat, mode badge, menu), opponent pill, turn timer, reconnecting/offline banners, forfeit sheet, result screens (Free result, Pool result, Space results).
 
 ## 8. Realtime chat
-(ADR-010 replaces the original Supabase Realtime design.) Messages are stored and read over HTTP: `POST /conversations/:id/messages` (client-generated UUID, idempotent; checks membership, blocks, request rules and limits), `GET /conversations/:id/messages` (cursor paging), `GET /conversations`, `POST .../read`, `.../accept`, `.../decline`. Live delivery is a WebSocket at `/realtime` on the same server (`ws`): authenticate with the first frame, then receive `message`, `read` and `typing` events and send `typing`. The socket closes when its access token expires and the app reconnects. Everything the socket carries is also available over HTTP, so a missed event costs only latency. The hub is in-process; running several instances needs Redis pub/sub.
+
+(ADR-010 replaces the original Supabase Realtime design.) Messages are stored and read over HTTP: `POST /conversations/:id/messages` (client-generated UUID, idempotent; checks membership, blocks, request rules and limits), `GET /conversations/:id/messages` (cursor paging), `GET /conversations`, `POST .../read`, `.../accept`, `.../decline`. Groups, bots, replies, reactions, deletes and polls (ADR-038): `POST /conversations/groups`, `GET|POST /conversations/:id/members`, `DELETE .../members/:userId`, `PUT .../members/:userId/role`, `PATCH /conversations/:id`, `POST .../leave`, `POST /conversations/bots/:slug`, `PUT .../messages/:mid/reaction`, `DELETE .../messages/:mid?scope=me|everyone`, `POST .../polls`, `PUT .../messages/:mid/vote`; `messages` also holds `message_hides` and `poll_votes`. Live delivery is a WebSocket at `/realtime` on the same server (`ws`): authenticate with the first frame, then receive `message`, `read`, `typing`, `reaction`, `poll`, `message_deleted` and `conversation` events and send `typing`. The socket closes when its access token expires and the app reconnects. Everything the socket carries is also available over HTTP, so a missed event costs only latency. The hub is in-process; running several instances needs Redis pub/sub.
 
 ## 9. Security
+
 - Supabase JWT everywhere; Colyseus verifies JWT with the project's JWKS.
 - Service role key only in Edge Functions and game-server, never in the app.
-- Rate limits: requests to strangers (20/day), money requests (30/day), SMS invites (50/day), OTP (Supabase limits + per-IP).
-- App integrity: Play Integrity / App Attest checks required before first Pool (via Edge Function), with a soft-fail flag in `app_config`.
+- Rate limits: every limit is in `docs/RATE_LIMITS.md` (requests to strangers 20/day, money requests 30/day, strangers' codes 20/day, SMS invites, OTP). HTTP throttles count the signed-in account, anonymous requests the address (ADR-039).
+- Integrity (ADR-039): Pool matches are judged when they would settle (`settle_or_hold`): collusion and timing signals, and a payout hold a moderator decides. Moderation runs through a separate database role (`dyce_admin`), views and audited SQL functions, behind admin tokens; the public API role cannot reach them.
+- App integrity: Play Integrity / App Attest at Pool entry through `IntegrityGate` and an `AttestationVerifier` (dev driver passes, production stub fails closed), enforced only when `integrity_required` is true in `app_config`.
 - Secrets in EAS secrets and Supabase vault. No secrets in the repo.
 
-## 10. Observability
-Sentry (app, Edge Functions, game-server) with release tags from EAS. PostHog events (see BUILD_PLAN analytics list). Structured logs in Edge Functions and game-server. A `/health` endpoint on game-server.
+## 10. Observability and operations (ADR-040)
+
+- **Logs:** one JSON object per line (`ts, level, service, release, requestId, msg, ...`) from the API and the game server, redacted by `packages/shared/src/redact.ts` (phone numbers, tokens, secrets never reach a log). The access line carries the route pattern, never the URL. Every response carries `X-Request-Id`.
+- **Errors:** Sentry in the app, the API and the game server, each behind its own DSN; with no DSN the SDK is not even loaded. Events are scrubbed. Only 5xx are reported from the API; expected errors (`DyceError`, `AuthError`, rate limits) are not.
+- **Probes:** `/health/live` (process only), `/health/ready` (database up and not draining; reports `release` and the newest `schema`), `/health` (back-compat); the game server has `/health/live` and `/health/ready`.
+- **Money:** the nightly `ledger_check_invariants` job (02:15 Africa/Lagos, advisory-locked, catch-up at boot) writes `ledger_check_runs` and alerts on a problem or on failing to run; `node db/ledger-gate.ts` answers the "clean for 14 days" launch gate.
+- **Alerts and runbook:** definitions in `Dyce/docs/MONITORING.md`, procedures in `Dyce/docs/RUNBOOK.md`.
+- **Single instance:** the realtime hub, the throttler counters and the game rooms are in memory. More than one API replica needs Redis pub/sub behind `RealtimeHub.publish` (ADR-010), shared throttling and locked crons; more than one game server needs a matchmaker (RUNBOOK section 12).
 
 ## 11. Environments
-`local` (supabase start + local game-server), `staging`, `production`. EAS build profiles: development (dev client), preview (internal), production. OTA updates through EAS Update channels matching profiles. Database changes only through migrations applied by CI.
+
+`local` (supabase start + local game-server), `staging`, `production`. EAS build profiles: development (dev client), preview (internal), production. OTA updates through EAS Update channels matching profiles. Database changes only through migrations applied as a separate deploy step with the owner role (`node db/migrate.ts`, see `Dyce/docs/RUNBOOK.md`); the services connect as `dyce_app`. `docker compose up` runs the whole backend locally in the production order. Every setting is documented in `deploy/production.env.example`.

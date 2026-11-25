@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { CONTENT_BLOCKED, isContentAllowed } from '../content-filter.ts';
 
 /** Who may send you a friend request or a first message: everyone, friends of friends, or nobody. */
 export const REQUEST_POLICIES = ['everyone', 'fof', 'nobody'] as const;
@@ -13,7 +14,13 @@ export const MAX_DISPLAY_NAME_LENGTH = 40;
  */
 export const profileUpdateSchema = z
   .object({
-    displayName: z.string().trim().min(1, 'Enter a name').max(MAX_DISPLAY_NAME_LENGTH).optional(),
+    displayName: z
+      .string()
+      .trim()
+      .min(1, 'Enter a name')
+      .max(MAX_DISPLAY_NAME_LENGTH)
+      .refine((s) => isContentAllowed(s, 'name'), CONTENT_BLOCKED)
+      .optional(),
     requestPolicy: requestPolicySchema.optional(),
   })
   .strict()

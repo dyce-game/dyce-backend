@@ -37,12 +37,32 @@ describe('validateEnv', () => {
       ...base,
       NODE_ENV: 'production',
       SMS_DRIVER: 'real',
+      PUSH_DRIVER: 'expo',
+      INTEGRITY_DRIVER: 'store',
       TERMII_API_KEY: 'k',
       TERMII_SENDER_ID: 'Dyce',
+      EMAIL_DRIVER: 'resend',
+      RESEND_API_KEY: 're_key',
+      EMAIL_FROM: 'Dyce <login@mail.dyce.games>',
     };
 
     it('accepts a properly configured production env', () => {
       expect(validateEnv(prod).NODE_ENV).toBe('production');
+    });
+    it('refuses the pass-everything device check in production', () => {
+      expect(() => validateEnv({ ...prod, INTEGRITY_DRIVER: 'dev' })).toThrow(/INTEGRITY_DRIVER/);
+    });
+    it('needs an admin database for the moderation tokens', () => {
+      expect(() => validateEnv({ ...prod, ADMIN_TOKENS: `amaka:${'a'.repeat(32)}` })).toThrow(
+        /ADMIN_DATABASE_URL/,
+      );
+      expect(
+        validateEnv({
+          ...prod,
+          ADMIN_TOKENS: `amaka:${'a'.repeat(32)}`,
+          ADMIN_DATABASE_URL: 'postgres://m@localhost/dyce',
+        }).ADMIN_TOKENS,
+      ).toBeDefined();
     });
     it('refuses a test OTP code in production', () => {
       expect(() => validateEnv({ ...prod, OTP_TEST_CODE: '123456' })).toThrow(
@@ -51,6 +71,22 @@ describe('validateEnv', () => {
     });
     it('refuses the console SMS driver in production', () => {
       expect(() => validateEnv({ ...prod, SMS_DRIVER: 'console' })).toThrow(/SMS_DRIVER/);
+    });
+    it('refuses the console email driver in production while email sign-in is on', () => {
+      expect(() => validateEnv({ ...prod, EMAIL_DRIVER: 'console' })).toThrow(/EMAIL_DRIVER/);
+    });
+    it('lets production run without email sign-in at all', () => {
+      const env = validateEnv({
+        ...prod,
+        EMAIL_AUTH_ENABLED: 'false',
+        EMAIL_DRIVER: 'console',
+        RESEND_API_KEY: undefined,
+        EMAIL_FROM: undefined,
+      });
+      expect(env.EMAIL_AUTH_ENABLED).toBe(false);
+    });
+    it('refuses the console push driver in production', () => {
+      expect(() => validateEnv({ ...prod, PUSH_DRIVER: 'console' })).toThrow(/PUSH_DRIVER/);
     });
   });
 
@@ -73,6 +109,33 @@ describe('validateEnv', () => {
           TWILIO_MESSAGING_SERVICE_SID: 'm',
         }),
       ).toBeTruthy();
+    });
+  });
+
+  describe('email sign-in (ADR-044)', () => {
+    it('is on by default with the console driver in development', () => {
+      const env = validateEnv(base);
+      expect(env.EMAIL_AUTH_ENABLED).toBe(true);
+      expect(env.EMAIL_DRIVER).toBe('console');
+    });
+    it('needs a key and a sender for Resend', () => {
+      const resend = { ...base, EMAIL_DRIVER: 'resend' };
+      expect(() => validateEnv(resend)).toThrow(/RESEND_API_KEY/);
+      expect(() => validateEnv({ ...resend, RESEND_API_KEY: 're_key' })).toThrow(/EMAIL_FROM/);
+      expect(() =>
+        validateEnv({ ...resend, RESEND_API_KEY: 're_key', EMAIL_FROM: 'not an address' }),
+      ).toThrow(/EMAIL_FROM/);
+    });
+    it('accepts a named or a bare sender address', () => {
+      for (const from of ['Dyce <login@mail.dyce.games>', 'login@mail.dyce.games']) {
+        const env = validateEnv({
+          ...base,
+          EMAIL_DRIVER: 'resend',
+          RESEND_API_KEY: 're_key',
+          EMAIL_FROM: from,
+        });
+        expect(env.EMAIL_FROM).toBe(from);
+      }
     });
   });
 });

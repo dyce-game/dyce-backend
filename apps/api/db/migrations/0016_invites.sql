@@ -1,4 +1,4 @@
--- SMS invites and the guest web game (docs/DECISIONS.md ADR-020).
+-- SMS invites and the guest web game (docs/DECISIONS.md ADR-021).
 --
 -- `sms_invites` (0002) already holds token, hashed phone and status. This adds the lifetime, the moments the
 -- status changed, who joined, and the guest's browser run. The invitee's number is never stored: only

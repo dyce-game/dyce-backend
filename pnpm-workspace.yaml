@@ -12,4 +12,4 @@ verifyDepsBeforeRun: false
 allowBuilds:
   '@embedded-postgres/windows-x64': false
   '@swc/core': true
-  msgpackr-extract: set this to true or false
+  msgpackr-extract: false

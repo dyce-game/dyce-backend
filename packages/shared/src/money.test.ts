@@ -2,7 +2,7 @@ import { kobo, nairaToKobo, splitKobo, WELCOME_GRANT_KOBO, positiveKoboSchema } 
 import { PAYOUT_WEIGHTS, appConfigSchema } from './config.ts';
 
 describe('kobo', () => {
-  it('welcome grant is ₦200,000 = 20,000,000 kobo', () => {
+  it('welcome grant is Ð200,000 = 20,000,000 kobo', () => {
     expect(WELCOME_GRANT_KOBO).toBe(20_000_000);
   });
   it('rejects floats and unsafe integers', () => {

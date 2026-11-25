@@ -1,0 +1,90 @@
+# The whole backend on one machine: PostgreSQL, the migration step, the API and the game server.
+#
+#   docker compose up --build            # then the app can use http://localhost:3000 and ws://localhost:2567
+#   docker compose down -v               # stop and wipe the database
+#
+# DEVELOPMENT ONLY. Every secret below is a throwaway value that is safe to publish; never reuse one anywhere real.
+# Sign-in codes are not texted: the fixed code 424242 works for every number (OTP_TEST_CODE, refused in production).
+#
+# This is also the shape of production: the `migrate` step runs to completion BEFORE the API and game server start,
+# with a more privileged login than the services themselves (docs/RUNBOOK.md "Deploy").
+
+x-service-env: &dev-env
+  NODE_ENV: development # the images default to production, which demands real SMS and push providers
+  LOG_FORMAT: pretty
+  DATABASE_URL: postgres://dyce_app:dyce_app@db:5432/dyce
+  JWT_SECRET: dev-only-jwt-secret-0123456789abcdef0123456789abcdef
+  PHONE_HASH_SALT: dev-only-phone-salt-0123456789abcdef0123456789abcdef
+  INTERNAL_SECRET: dev-only-internal-secret-0123456789abcdef0123456789abcdef
+
+services:
+  db:
+    image: postgres:17
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: dyce
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates dyce_api / dyce_app before the migrations run.
+      - ./deploy/postgres/init-roles.sql:/docker-entrypoint-initdb.d/00-roles.sql:ro
+    ports:
+      - '${DB_PORT:-55432}:5432'
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d dyce']
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      args: { RELEASE: '${RELEASE:-local}' }
+    image: dyce-api:local
+    command: ['node', 'db/migrate.ts']
+    environment:
+      # The OWNER login, not the app role: migrations create tables and functions.
+      DATABASE_URL: postgres://postgres:postgres@db:5432/dyce
+    depends_on:
+      db: { condition: service_healthy }
+    restart: 'no'
+
+  api:
+    image: dyce-api:local
+    init: true
+    environment:
+      <<: *dev-env
+      PORT: '3000'
+      SMS_DRIVER: console
+      OTP_TEST_CODE: '424242'
+      PUSH_DRIVER: console
+      GAME_SERVER_URL: http://game-server:2567
+      GAME_SERVER_PUBLIC_URL: ws://localhost:${GAME_PORT:-2567}
+      INVITE_BASE_URL: http://localhost:8081
+      CORS_ORIGINS: http://localhost:8081
+      SHUTDOWN_DRAIN_MS: '2000'
+    ports:
+      - '${API_PORT:-3000}:3000'
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    stop_grace_period: 30s
+
+  game-server:
+    build:
+      context: .
+      dockerfile: apps/game-server/Dockerfile
+      args: { RELEASE: '${RELEASE:-local}' }
+    image: dyce-game-server:local
+    init: true
+    environment:
+      <<: *dev-env
+      PORT: '2567'
+      SHUTDOWN_DRAIN_MS: '2000'
+    ports:
+      - '${GAME_PORT:-2567}:2567'
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    stop_grace_period: 30s
+
+volumes:
+  pgdata:

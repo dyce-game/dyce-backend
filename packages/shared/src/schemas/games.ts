@@ -7,6 +7,16 @@ export const matchModeSchema = z.enum(['free', 'pool']);
 export type MatchMode = z.infer<typeof matchModeSchema>;
 
 /**
+ * Per-match options (ADR-041): a variant picked when the game is sent, for example `{ variant: 'kalah' }` on
+ * Ayo. The server accepts only the keys and values the game offers (`GameInfo.options`) and the engine's own
+ * config validation has the last word.
+ */
+export const matchOptionsSchema = z
+  .record(z.string().min(1).max(24), z.union([z.string().max(24), z.number(), z.boolean()]))
+  .refine((o) => Object.keys(o).length <= 4, 'too many options');
+export type MatchOptions = z.infer<typeof matchOptionsSchema>;
+
+/**
  * The app makes the match id (a UUID, also the id of its chat card), so a retry after a bad connection
  * can't send the same game twice.
  */
@@ -23,6 +33,8 @@ export const createMatchSchema = z.object({
   stakeKobo: z.number().int().min(0).max(1_000_000_000).default(0),
   /** Pool only: may the other person suggest a smaller stake (or play free) once? */
   allowCounter: z.boolean().default(true),
+  /** A variant of the game (see `GameInfo.options`); omitted = the game's default rules. */
+  options: matchOptionsSchema.optional(),
 });
 export type CreateMatchRequest = z.input<typeof createMatchSchema>;
 
@@ -59,6 +71,24 @@ export type SubmitMoveRequest = z.infer<typeof submitMoveSchema>;
 
 export type GameDimension = '2d' | '3d';
 
+/** One choice of a per-match option, for example Ayo's "Mancala (Kalah)". */
+export type GameOptionChoice = {
+  value: string | number | boolean;
+  label: string;
+  /** A short line under the label ("6 seeds a pit, a store each"). */
+  note?: string;
+  /** Can this variant be played for stakes? (Darts' Around the clock is a free variant.) */
+  pool: boolean;
+};
+
+/** A switch the sender sees on the mode sheet before sending (a mode of the same board). */
+export type GameOption = {
+  key: string;
+  label: string;
+  default: string | number | boolean;
+  choices: GameOptionChoice[];
+};
+
 /** A game in the Games drawer. */
 export type GameInfo = {
   slug: string;
@@ -69,6 +99,10 @@ export type GameInfo = {
   maxPlayers: number;
   categories: string[];
   supportsPool: boolean;
+  /** The smallest Pool stake for this game (docs/GAMES.md), in kobo; null = just the platform minimum. */
+  poolMinKobo: number | null;
+  /** Per-match variants (empty or absent for games with a single rule set). */
+  options?: GameOption[];
 };
 
 export type GamesResponse = { games: GameInfo[] };
@@ -117,6 +151,15 @@ export type MatchView = {
   /** Pool: the invitee's counter-offer while the match is `countered` (0 = play free). */
   counterStakeKobo: number | null;
   allowCounter: boolean;
+  /** The variant chosen at send time (`{}` = the game's default rules). */
+  options?: MatchOptions;
+  /** A readable name for a non-default variant ("Mancala (Kalah)"), else null. */
+  variantLabel?: string | null;
+  /**
+   * Pool, running: when the player(s) to move forfeit if nobody has moved (24 hours after the last move).
+   * Null for Free matches and for matches that are not running.
+   */
+  turnDeadlineAt?: string | null;
   status: MatchStatus;
   conversationId: string | null;
   createdBy: string;
@@ -145,6 +188,8 @@ export type GameCardPayload = {
   counterStakeKobo: number | null;
   /** Pool: may the invitee counter? (Decides which buttons the card shows.) */
   allowCounter: boolean;
+  /** A readable name for a non-default variant ("Mancala (Kalah)"), else null/absent. */
+  variantLabel?: string | null;
   status: MatchStatus;
   currentTurn: string | null;
   /** null until the match has finished. */

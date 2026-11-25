@@ -16,13 +16,13 @@ export const PAYOUT_WEIGHTS: Record<PayoutScheme, readonly number[]> = {
 };
 
 export const appConfigSchema = z.object({
-  /** Per-send cap (kobo). ₦50,000. */
+  /** Per-send cap (kobo). Ð50,000. */
   send_limit_kobo: z.number().int().default(nairaToKobo(50_000)),
-  /** Daily send cap (kobo). ₦200,000. */
+  /** Daily send cap (kobo). Ð200,000. */
   send_daily_limit_kobo: z.number().int().default(nairaToKobo(200_000)),
-  /** Free top-up claimable when balance is under this. ₦10,000. */
+  /** Free top-up claimable when balance is under this. Ð10,000. */
   topup_threshold_kobo: z.number().int().default(nairaToKobo(10_000)),
-  /** Free daily top-up amount. ₦20,000. */
+  /** Free daily top-up amount. Ð20,000. */
   topup_amount_kobo: z.number().int().default(nairaToKobo(20_000)),
   /** Max open QR/payment requests per user. */
   max_open_requests: z.number().int().default(10),
@@ -52,6 +52,20 @@ export const appConfigSchema = z.object({
   integrity_required: z.boolean().default(false),
   /** Invitee has this long to respond before the stake is refunded. */
   match_invite_ttl_hours: z.number().int().default(24),
+  /** Quick match: how long a search runs before it gives up. */
+  quick_match_search_seconds: z.number().int().default(60),
+  /** Quick match: the level gap first allowed, widened to anyone after `quick_match_widen_seconds`. */
+  quick_match_level_gap: z.number().int().default(3),
+  quick_match_widen_seconds: z.number().int().default(15),
+  /** Quick match: time each person has to accept a found match (plus a short grace for the network). */
+  quick_match_accept_seconds: z.number().int().default(10),
+  quick_match_accept_grace_seconds: z.number().int().default(3),
+  /** Quick match tickets one person may open per rolling hour. */
+  quick_match_per_hour: z.number().int().default(30),
+  /** Declined or missed matches in 10 minutes before a person must wait. */
+  quick_match_miss_limit: z.number().int().default(3),
+  /** The same two people are not matched again within this many minutes. */
+  quick_match_rematch_minutes: z.number().int().default(10),
 });
 
 export type AppConfig = z.infer<typeof appConfigSchema>;

@@ -47,6 +47,12 @@ beforeAll(async () => {
   } finally {
     process.chdir(here);
   }
+  // These tests drive seats with bots that answer in milliseconds, which the integrity layer (backend ADR-039)
+  // rightly reads as impossible timing. Payout holds have their own test below.
+  await db.admin.query(
+    `INSERT INTO app_config (key, value) VALUES ('integrity_hold_threshold', '101')
+     ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`,
+  );
   server = createGameServer({
     pool: db.app,
     jwtSecret: JWT_SECRET,
@@ -377,6 +383,79 @@ describe('leaving and reconnecting', () => {
     expect(await balanceOf(db, stay.user.id)).toBe(GRANT + FEE);
     expect(await balanceOf(db, go.user.id)).toBe(GRANT - FEE);
     expect((await matchRow(matchId)).status).toBe('finished');
+    stay.leaveSocket();
+  });
+
+  it('a live Pool game the integrity layer is suspicious of is held: the result stands, the pot waits for a moderator', async () => {
+    await db.admin.query(
+      `UPDATE app_config SET value = '70' WHERE key = 'integrity_hold_threshold'`,
+    );
+    const { seats, matchId } = await table({ n: 2, pool: true });
+    const [stay, go] = seats as [Seat, Seat];
+    // the same two accounts, five meetings in a week, one phone: what wash trading looks like (ADR-039)
+    const phone = Buffer.from('ab'.repeat(32), 'hex');
+    for (const u of [stay.user, go.user]) {
+      await db.admin.query(
+        `INSERT INTO user_fingerprints (user_id, kind, value_hash) VALUES ($1, 'device', $2)`,
+        [u.id, phone],
+      );
+    }
+    for (let i = 0; i < 4; i++) {
+      const id = randomUUID();
+      await db.admin.query(
+        `INSERT INTO matches (id, game_slug, mode, stake_kobo, status, seed, created_by, finished_at)
+         VALUES ($1, 'whot', 'pool', $2, 'finished', 1, $3, now())`,
+        [id, FEE, stay.user.id],
+      );
+      for (const [seat, u] of [stay.user, go.user].entries()) {
+        await db.admin.query(
+          `INSERT INTO match_players (match_id, user_id, seat, staked_kobo, placement, result, payout_kobo)
+           VALUES ($1, $2, $3, $4, $5, $6::match_result, $7)`,
+          [
+            id,
+            u.id,
+            seat + 1,
+            FEE,
+            seat + 1,
+            seat === 0 ? 'win' : 'loss',
+            seat === 0 ? 2 * FEE : 0,
+          ],
+        );
+      }
+    }
+    go.send('leave');
+    const st = await until(
+      () => (stay.state?.status === 'finished' ? stay.state : null),
+      'the game to end',
+    );
+    // the placements and results are what the game decided; nobody has been paid
+    expect(st.results!.map((r) => [r.userId, r.placement, r.result, r.payoutKobo])).toEqual([
+      [stay.user.id, 1, 'win', null],
+      [go.user.id, 2, 'forfeit', null],
+    ]);
+    expect(await balanceOf(db, stay.user.id)).toBe(GRANT - FEE);
+    expect(await balanceOf(db, go.user.id)).toBe(GRANT - FEE);
+    expect((await matchRow(matchId)).status).toBe('disputed');
+    const hold = await db.admin.query(`SELECT status FROM integrity_holds WHERE match_id = $1`, [
+      matchId,
+    ]);
+    expect(hold.rows).toEqual([{ status: 'held' }]);
+    const escrow = await db.admin.query(
+      `SELECT coalesce(sum(e.amount_kobo), 0)::bigint AS s FROM ledger_accounts a
+         JOIN ledger_entries e ON e.account_id = a.id WHERE a.kind = 'pool_escrow' AND a.match_id = $1`,
+      [matchId],
+    );
+    expect(Number(escrow.rows[0].s)).toBe(2 * FEE);
+    // a moderator releasing it pays the winner exactly as the room decided
+    await db.admin.query(
+      `SELECT resolve_integrity_hold(id, 'release', 'amaka', 'checked') FROM integrity_holds WHERE match_id = $1`,
+      [matchId],
+    );
+    expect(await balanceOf(db, stay.user.id)).toBe(GRANT + FEE);
+    expect((await matchRow(matchId)).status).toBe('finished');
+    await db.admin.query(
+      `UPDATE app_config SET value = '101' WHERE key = 'integrity_hold_threshold'`,
+    );
     stay.leaveSocket();
   });
 

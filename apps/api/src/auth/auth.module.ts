@@ -9,12 +9,17 @@ import { ProfileController } from '../profile/profile.controller.ts';
 import { ProfileService } from '../profile/profile.service.ts';
 import { buildSmsProvider } from '../sms/sms.factory.ts';
 import type { SmsProvider } from '../sms/sms-provider.ts';
-import { AuthController } from './auth.controller.ts';
+import { buildEmailProvider } from '../email/email.factory.ts';
+import type { EmailProvider } from '../email/email-provider.ts';
+import { AuthController, IdentityController } from './auth.controller.ts';
 import { AuthGuard } from './auth.guard.ts';
 import { AuthService } from './auth.service.ts';
+import { parseReviewLogins } from './review-logins.ts';
 import { TokenService } from './tokens.ts';
 
 const SMS_PROVIDER = Symbol('SMS_PROVIDER');
+/** `null` when EMAIL_AUTH_ENABLED=false: email sign-in is then off everywhere. */
+const EMAIL_PROVIDER = Symbol('EMAIL_PROVIDER');
 const log = new Logger('Auth');
 
 /** Nightly housekeeping for spent OTP challenges and long-dead refresh tokens. */
@@ -30,7 +35,7 @@ export class AuthMaintenance {
 
 @Module({
   imports: [LedgerModule],
-  controllers: [AuthController, ProfileController],
+  controllers: [AuthController, IdentityController, ProfileController],
   providers: [
     {
       provide: TokenService,
@@ -48,9 +53,21 @@ export class AuthMaintenance {
         ),
     },
     {
+      provide: EMAIL_PROVIDER,
+      useFactory: (): EmailProvider | null => {
+        const env = validateEnv(process.env);
+        return env.EMAIL_AUTH_ENABLED ? buildEmailProvider(env) : null;
+      },
+    },
+    {
       provide: AuthService,
-      inject: [PG_POOL, SMS_PROVIDER, TokenService],
-      useFactory: (pool: pg.Pool, sms: SmsProvider, tokens: TokenService) => {
+      inject: [PG_POOL, SMS_PROVIDER, TokenService, EMAIL_PROVIDER],
+      useFactory: (
+        pool: pg.Pool,
+        sms: SmsProvider,
+        tokens: TokenService,
+        email: EmailProvider | null,
+      ) => {
         const env = validateEnv(process.env);
         return new AuthService(
           pool,
@@ -61,9 +78,11 @@ export class AuthMaintenance {
             otpTtlSeconds: env.OTP_TTL_SECONDS,
             refreshTtlDays: env.REFRESH_TTL_DAYS,
             otpTestCode: env.OTP_TEST_CODE,
+            reviewCodes: parseReviewLogins(env.REVIEW_LOGINS).codes,
           },
           () => new Date(),
           { warn: (m) => log.warn(m) },
+          email ?? undefined,
         );
       },
     },

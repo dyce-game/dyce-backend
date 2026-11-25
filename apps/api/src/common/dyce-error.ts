@@ -31,6 +31,21 @@ export const DYCE_ERROR_CODES = [
   'balance_too_high',
   'recipient_unavailable',
   'no_wallet',
+  // moderation and integrity (ADR-039): raised by the admin functions of migration 0025
+  'hold_not_found',
+  'hold_resolved',
+  'invalid_decision',
+  'invalid_duration',
+  'report_not_found',
+  'report_resolved',
+  'sanction_not_found',
+  'signal_not_found',
+  'dispute_not_found',
+  'dispute_resolved',
+  'invalid_dispute_status',
+  'reversal_required',
+  'user_not_found',
+  'admin_required',
 ] as const;
 
 export type DyceErrorCode = (typeof DYCE_ERROR_CODES)[number];
@@ -60,6 +75,12 @@ export function httpStatusFor(code: DyceErrorCode): number {
     case 'request_not_found':
     case 'match_not_found':
     case 'no_wallet':
+    case 'hold_not_found':
+    case 'report_not_found':
+    case 'sanction_not_found':
+    case 'signal_not_found':
+    case 'dispute_not_found':
+    case 'user_not_found':
       return 404;
     case 'blocked':
     case 'adult_required':
@@ -78,6 +99,11 @@ export function httpStatusFor(code: DyceErrorCode): number {
     case 'amount_mismatch':
     case 'self_payment':
     case 'recipient_unavailable':
+    case 'invalid_decision':
+    case 'invalid_duration':
+    case 'invalid_dispute_status':
+    case 'reversal_required':
+    case 'admin_required':
       return 422;
     default:
       return 409; // insufficient_funds, already paid/settled/expired/cancelled, closed, etc.

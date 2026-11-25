@@ -1,11 +1,14 @@
 import type pg from 'pg';
 import {
+  BOTS,
+  botBySlug,
   parseAvatar,
   type ConversationFilter,
   type ConversationState,
   type ConversationSummary,
   type ConversationsResponse,
   type GameCardPayload,
+  type GroupRole,
   type Message,
   type MessagesResponse,
   type MoneyRequestPayload,
@@ -17,12 +20,23 @@ import { AuthError } from '../auth/auth-error.ts';
 import type { Clock } from '../auth/tokens.ts';
 import { lagosDayStart, readConfigInt } from '../db/config.ts';
 import { withTx } from '../db/tx.ts';
+import { assertNotRestricted } from '../integrity/restrictions.ts';
+import { applySpamFilter } from '../integrity/spam-filter.ts';
 import {
   FRIENDSHIP_JOIN,
   lockPair,
   NOT_BLOCKED,
   RELATIONSHIP_EXPR,
 } from '../social/relationship.ts';
+import { BotService } from './bots.ts';
+import {
+  hydrate,
+  hydrateOne,
+  MSG_COLS,
+  NOT_HIDDEN,
+  toMessage,
+  type MessageRow,
+} from './message-rows.ts';
 
 /** Where live events go. The WebSocket hub implements it; tests pass a recorder. */
 export interface Publisher {
@@ -31,34 +45,38 @@ export interface Publisher {
 
 type MemberState = 'active' | 'request' | 'declined' | 'left';
 
-type MessageRow = {
-  id: string;
-  conversation_id: string;
-  sender_id: string;
-  kind: Message['kind'];
-  body: string;
-  payload: unknown;
-  created_at: Date;
+/** Rows selected with MSG_COLS come from this join. */
+const FROM_MESSAGES = 'FROM messages m JOIN conversations c ON c.id = m.conversation_id';
+
+/** What you are to a conversation: how it is shaped, and where you stand in it. */
+type Membership = {
+  kind: 'direct' | 'group' | 'bot' | 'sms';
+  botSlug: string | null;
+  state: MemberState;
+  role: GroupRole;
+  joinedAt: Date;
 };
 
-const toMessage = (r: MessageRow): Message => {
-  const base = {
-    id: r.id,
-    conversationId: r.conversation_id,
-    senderId: r.sender_id,
-    body: r.body,
-    createdAt: r.created_at.toISOString(),
-  };
-  switch (r.kind) {
-    case 'money_sent':
-      return { ...base, kind: 'money_sent', payload: r.payload as MoneySentPayload };
-    case 'money_request':
-      return { ...base, kind: 'money_request', payload: r.payload as MoneyRequestPayload };
-    case 'game':
-      return { ...base, kind: 'game', payload: r.payload as GameCardPayload };
-    default:
-      return { ...base, kind: 'text' };
-  }
+/** The list row of a group or a bot. */
+type GroupSummaryRow = {
+  id: string;
+  kind: 'group' | 'bot';
+  title: string | null;
+  photo_url: string | null;
+  bot_slug: string | null;
+  role: GroupRole;
+  member_count: number;
+  preview: { id: string; username: string; display_name: string; avatar: unknown }[];
+  unread: number;
+  has_user_msg: boolean;
+  m_id: string | null;
+  m_sender: string | null;
+  m_kind: Message['kind'] | null;
+  m_body: string | null;
+  m_payload: unknown;
+  m_created: Date | null;
+  m_deleted: Date | null;
+  m_sender_name: string | null;
 };
 
 type SummaryRow = {
@@ -69,6 +87,8 @@ type SummaryRow = {
   avatar: unknown;
   relationship: Relationship;
   state: ConversationState | 'declined' | 'left';
+  /** Set when the spam filter put this request aside (ADR-039). */
+  filtered_at: Date | null;
   unread: number;
   m_id: string | null;
   m_sender: string | null;
@@ -76,6 +96,7 @@ type SummaryRow = {
   m_body: string | null;
   m_payload: unknown;
   m_created: Date | null;
+  m_deleted: Date | null;
 };
 
 /** What the two people in a conversation can do right now, from `viewer`'s side. */
@@ -85,6 +106,8 @@ type Seat = {
   isNew: boolean; // no message has been sent yet
   myState: MemberState;
   peerState: MemberState;
+  /** The spam filter put the peer's copy of this request aside: they are not told about new messages. */
+  peerFiltered: boolean;
   peerReadAt: Date | null;
 };
 
@@ -101,11 +124,17 @@ type Seat = {
  * active for both, so becoming friends is enough and nothing needs rewriting.
  */
 export class MessagesService {
+  /** The practice bots (scripted replies). Exposed so tests and shutdown can wait for pending replies. */
+  readonly bots: BotService;
+
   constructor(
     private readonly pool: pg.Pool,
     private readonly publisher: Publisher,
     private readonly clock: Clock = () => new Date(),
-  ) {}
+    options: { botReplyDelayMs?: number } = {},
+  ) {
+    this.bots = new BotService(pool, publisher, clock, options.botReplyDelayMs);
+  }
 
   // ---- opening --------------------------------------------------------------------------------
 
@@ -148,28 +177,58 @@ export class MessagesService {
 
   /** Your conversations, most recent first. Requests are separate from the rest. */
   async list(userId: string, filter: ConversationFilter = 'all'): Promise<ConversationsResponse> {
-    const rows = await this.summaries(this.pool, userId, { onlyWithMessages: true });
-    const all = rows.map(toSummary);
-    const active = all.filter((c) => c.state === 'active');
-    const requests = all.filter((c) => c.state === 'request');
+    // The Bots filter always lists all four bots: they are created (with a greeting) the first time you look.
+    if (filter === 'bots') await this.bots.ensureAll(userId);
+
+    const directRows = await this.summaries(this.pool, userId, { onlyWithMessages: true });
+    const direct = directRows.map(toSummary);
+    // Requests the spam filter put aside: still there, in their own bucket, not in the badge (ADR-039).
+    const filteredIds = new Set(
+      directRows.filter((r) => r.state === 'request' && r.filtered_at).map((r) => r.id),
+    );
+    const others = (await this.groupSummaries(this.pool, userId, {})).map(toGroupSummary);
+
+    const activeDirect = direct.filter((c) => c.state === 'active');
+    const requests = direct.filter((c) => c.state === 'request' && !filteredIds.has(c.id));
+    const filtered = direct.filter((c) => filteredIds.has(c.id));
+    // A bot joins "All" once you have said something to it, so four greetings don't fill a new inbox.
+    const groups = others.filter((c) => c.summary.kind === 'group').map((c) => c.summary);
+    const bots = others.filter((c) => c.summary.kind === 'bot');
+    const usedBots = bots.filter((c) => c.started).map((c) => c.summary);
+
+    const byRecent = (a: ConversationSummary, b: ConversationSummary) =>
+      (b.lastMessage?.createdAt ?? '').localeCompare(a.lastMessage?.createdAt ?? '');
+
     const shown =
       filter === 'requests'
         ? requests
-        : filter === 'friends'
-          ? active.filter((c) => c.peer.relationship === 'friends')
-          : active;
+        : filter === 'filtered'
+          ? filtered
+          : filter === 'friends'
+            ? activeDirect.filter((c) => c.peer?.relationship === 'friends')
+            : filter === 'groups'
+              ? groups
+              : filter === 'bots'
+                ? bots.map((c) => c.summary)
+                : [...activeDirect, ...groups, ...usedBots].sort(byRecent);
     return {
-      conversations: shown,
+      conversations: filter === 'bots' ? [...shown].sort(botOrder) : shown,
       requestCount: requests.length,
-      unreadTotal: active.reduce((n, c) => n + c.unread, 0),
+      filteredCount: filtered.length,
+      unreadTotal: [...activeDirect, ...groups, ...bots.map((b) => b.summary)].reduce(
+        (n, c) => n + c.unread,
+        0,
+      ),
     };
   }
 
   async get(userId: string, conversationId: string): Promise<ConversationSummary> {
     const rows = await this.summaries(this.pool, userId, { conversationId });
     const row = rows[0];
-    if (!row) throw new AuthError('conversation_not_found');
-    return toSummary(row);
+    if (row) return toSummary(row);
+    const other = (await this.groupSummaries(this.pool, userId, { conversationId }))[0];
+    if (!other) throw new AuthError('conversation_not_found');
+    return toGroupSummary(other).summary;
   }
 
   /** A page of messages, newest first. */
@@ -179,31 +238,39 @@ export class MessagesService {
     opts: { before?: string; limit?: number } = {},
   ): Promise<MessagesResponse> {
     const limit = Math.min(Math.max(opts.limit ?? 30, 1), 50);
-    const seat = await this.seat(this.pool, userId, conversationId);
+    const member = await this.membership(this.pool, userId, conversationId);
+    const seat =
+      member.kind === 'direct' ? await this.seat(this.pool, userId, conversationId) : null;
 
-    const params: unknown[] = [conversationId, limit + 1];
-    let cursor = '';
+    // Deleted-for-everyone messages stay as tombstones; ones you deleted for yourself are gone.
+    const params: unknown[] = [conversationId, limit + 1, userId];
+    let where = `m.conversation_id = $1 AND ${NOT_HIDDEN('$3::uuid')}`;
+    if (member.kind === 'group') {
+      // A group shows its history from when you joined, and nothing from people you blocked.
+      params.push(member.joinedAt);
+      where += ` AND m.created_at >= $${params.length}::timestamptz
+        AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = $3::uuid AND b.blocked_id = m.sender_id)`;
+    }
     if (opts.before) {
       const [ts, id] = opts.before.split('|') as [string, string];
       params.push(ts, id);
-      cursor = `AND (created_at, id) < ($3::timestamptz, $4::uuid)`;
+      where += ` AND (m.created_at, m.id) < ($${params.length - 1}::timestamptz, $${params.length}::uuid)`;
     }
     const r = await this.pool.query<MessageRow>(
-      `SELECT id, conversation_id, sender_id, kind, body, payload, created_at
-         FROM messages
-        WHERE conversation_id = $1 AND deleted_at IS NULL ${cursor}
-        ORDER BY created_at DESC, id DESC
+      `SELECT ${MSG_COLS} ${FROM_MESSAGES}
+        WHERE ${where}
+        ORDER BY m.created_at DESC, m.id DESC
         LIMIT $2`,
       params,
     );
-    const page = r.rows.slice(0, limit).map(toMessage);
+    const page = await hydrate(this.pool, userId, r.rows.slice(0, limit));
     const last = page[page.length - 1];
     return {
       messages: page,
       nextCursor: r.rows.length > limit && last ? `${last.createdAt}|${last.id}` : null,
-      // Reading is only visible to the sender once the conversation is accepted.
+      // Reading is only visible to the sender once the conversation is accepted. Groups and bots have no read receipts.
       peerReadAt:
-        effective(seat.peerState, seat.friends) === 'active'
+        seat && effective(seat.peerState, seat.friends) === 'active'
           ? (seat.peerReadAt?.toISOString() ?? null)
           : null,
     };
@@ -218,7 +285,18 @@ export class MessagesService {
   async send(
     userId: string,
     conversationId: string,
-    input: { id: string; body: string },
+    input: { id: string; body: string; replyTo?: string },
+  ): Promise<Message> {
+    const member = await this.membership(this.pool, userId, conversationId);
+    if (member.kind === 'group') return this.sendInGroup(userId, conversationId, input);
+    if (member.kind === 'bot') return this.sendToBot(userId, conversationId, input);
+    return this.sendDirect(userId, conversationId, input);
+  }
+
+  private async sendDirect(
+    userId: string,
+    conversationId: string,
+    input: { id: string; body: string; replyTo?: string },
   ): Promise<Message> {
     const now = this.clock();
 
@@ -229,19 +307,22 @@ export class MessagesService {
       const seat = await this.seat(c, userId, conversationId);
       await this.assertReachable(c, userId, peerId);
 
-      const existing = await c.query<MessageRow>(
-        `SELECT id, conversation_id, sender_id, kind, body, payload, created_at FROM messages WHERE id = $1`,
-        [input.id],
-      );
-      const prior = existing.rows[0];
-      if (prior) {
-        if (prior.conversation_id !== conversationId || prior.sender_id !== userId) {
-          throw new AuthError('message_id_taken');
-        }
-        return { message: toMessage(prior), fresh: false, notifyPeer: false, peerId: seat.peerId };
-      }
+      const prior = await this.priorSend(c, userId, conversationId, input.id);
+      if (prior) return { row: prior, fresh: false, notifyPeer: false, peerId: seat.peerId };
 
+      await assertNotRestricted(c, userId);
+      if (input.replyTo) await this.assertReplyTarget(c, conversationId, input.replyTo);
       if (!seat.friends) await this.checkStrangerRules(c, userId, conversationId, seat, now);
+      // A request that looks like spam goes to the recipient's filtered bucket and is not pushed to them.
+      const filtered =
+        !seat.friends && seat.peerState === 'request'
+          ? await applySpamFilter(c, {
+              conversationId,
+              sender: userId,
+              recipient: seat.peerId,
+              now,
+            })
+          : false;
 
       // Writing in a request is accepting it; becoming friends also makes both sides active.
       if (seat.myState !== 'active') {
@@ -251,31 +332,134 @@ export class MessagesService {
         await this.setState(c, conversationId, seat.peerId, 'active');
       }
 
-      const inserted = await c.query<MessageRow>(
-        `INSERT INTO messages (id, conversation_id, sender_id, kind, body, created_at)
-         VALUES ($1, $2, $3, 'text', $4, $5)
-         RETURNING id, conversation_id, sender_id, kind, body, payload, created_at`,
-        [input.id, conversationId, userId, input.body, now],
-      );
-      await c.query(`UPDATE conversations SET last_message_at = $2 WHERE id = $1`, [
-        conversationId,
-        now,
-      ]);
+      const row = await this.insertText(c, userId, conversationId, input, now);
       // Someone who ignored a request gets no live events (and nothing else) from the sender.
-      const notifyPeer = effective(seat.peerState, seat.friends) !== 'declined';
-      return {
-        message: toMessage(inserted.rows[0]!),
-        fresh: true,
-        notifyPeer,
-        peerId: seat.peerId,
-      };
+      const notifyPeer = !isQuiet(seat) && !filtered;
+      return { row, fresh: true, notifyPeer, peerId: seat.peerId };
     });
 
+    const message = await hydrateOne(this.pool, userId, result.row);
     if (result.fresh) {
       const targets = result.notifyPeer ? [userId, result.peerId] : [userId];
-      this.safePublish(targets, { type: 'message', message: result.message });
+      this.safePublish(targets, { type: 'message', message });
     }
-    return result.message;
+    return message;
+  }
+
+  /** Text into a group: everyone still in it gets it live, except people who blocked the sender. */
+  private async sendInGroup(
+    userId: string,
+    conversationId: string,
+    input: { id: string; body: string; replyTo?: string },
+  ): Promise<Message> {
+    const now = this.clock();
+    const result = await withTx(this.pool, async (c) => {
+      // Share-lock your own row: a removal in flight finishes first, so a removed member can't slip a message in.
+      const me = await c.query(
+        `SELECT 1 FROM conversation_members m JOIN conversations cv ON cv.id = m.conversation_id
+          WHERE m.conversation_id = $1 AND m.user_id = $2 AND m.state = 'active' AND cv.kind = 'group'
+            FOR SHARE OF m`,
+        [conversationId, userId],
+      );
+      if (me.rows.length === 0) throw new AuthError('conversation_not_found');
+      const prior = await this.priorSend(c, userId, conversationId, input.id);
+      if (prior) return { row: prior, fresh: false, to: [] as string[] };
+      await assertNotRestricted(c, userId);
+      if (input.replyTo) await this.assertReplyTarget(c, conversationId, input.replyTo);
+      const row = await this.insertText(c, userId, conversationId, input, now);
+      return { row, fresh: true, to: await this.groupRecipients(c, conversationId, userId) };
+    });
+    const message = await hydrateOne(this.pool, userId, result.row);
+    if (result.fresh) this.safePublish(result.to, { type: 'message', message });
+    return message;
+  }
+
+  /** Text to a bot: stored, shown at once, and answered by the script a moment later. */
+  private async sendToBot(
+    userId: string,
+    conversationId: string,
+    input: { id: string; body: string; replyTo?: string },
+  ): Promise<Message> {
+    const now = this.clock();
+    const result = await withTx(this.pool, async (c) => {
+      const prior = await this.priorSend(c, userId, conversationId, input.id);
+      if (prior) return { row: prior, fresh: false };
+      if (input.replyTo) await this.assertReplyTarget(c, conversationId, input.replyTo);
+      return { row: await this.insertText(c, userId, conversationId, input, now), fresh: true };
+    });
+    const message = await hydrateOne(this.pool, userId, result.row);
+    if (result.fresh) {
+      this.safePublish([userId], { type: 'message', message });
+      this.bots.scheduleReply(userId, conversationId, message.id);
+    }
+    return message;
+  }
+
+  /** The message with this id if you already sent it here (a retry); another conversation's or person's id is taken. */
+  private async priorSend(
+    c: pg.PoolClient,
+    userId: string,
+    conversationId: string,
+    id: string,
+  ): Promise<MessageRow | null> {
+    const existing = await c.query<MessageRow>(
+      `SELECT ${MSG_COLS} ${FROM_MESSAGES} WHERE m.id = $1`,
+      [id],
+    );
+    const prior = existing.rows[0];
+    if (!prior) return null;
+    if (prior.conversation_id !== conversationId || prior.sender_id !== userId) {
+      throw new AuthError('message_id_taken');
+    }
+    return prior;
+  }
+
+  /** A reply must answer a live message of the same conversation. */
+  private async assertReplyTarget(
+    c: pg.PoolClient,
+    conversationId: string,
+    messageId: string,
+  ): Promise<void> {
+    const r = await c.query(
+      `SELECT 1 FROM messages WHERE id = $1 AND conversation_id = $2 AND deleted_at IS NULL`,
+      [messageId, conversationId],
+    );
+    if (r.rows.length === 0) throw new AuthError('message_not_found');
+  }
+
+  private async insertText(
+    c: pg.PoolClient,
+    userId: string,
+    conversationId: string,
+    input: { id: string; body: string; replyTo?: string },
+    now: Date,
+  ): Promise<MessageRow> {
+    const inserted = await c.query<MessageRow>(
+      `INSERT INTO messages (id, conversation_id, sender_id, kind, body, reply_to, created_at)
+       VALUES ($1, $2, $3, 'text', $4, $5, $6)
+       RETURNING id, conversation_id, sender_id, kind, body, payload, created_at, deleted_at, reply_to`,
+      [input.id, conversationId, userId, input.body, input.replyTo ?? null, now],
+    );
+    await c.query(`UPDATE conversations SET last_message_at = $2 WHERE id = $1`, [
+      conversationId,
+      now,
+    ]);
+    return inserted.rows[0]!;
+  }
+
+  /** The active members of a group who should get a live event from `senderId` (not those who blocked them). */
+  async groupRecipients(
+    db: Pick<pg.Pool, 'query'>,
+    conversationId: string,
+    senderId: string,
+  ): Promise<string[]> {
+    const r = await db.query<{ user_id: string }>(
+      `SELECT m.user_id FROM conversation_members m
+        WHERE m.conversation_id = $1 AND m.state = 'active'
+          AND NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = m.user_id AND b.blocked_id = $2)`,
+      [conversationId, senderId],
+    );
+    return r.rows.map((x) => x.user_id);
   }
 
   /**
@@ -327,7 +511,7 @@ export class MessagesService {
       return {
         message: toMessage(row),
         fresh: Boolean(inserted.rows[0]),
-        notify: effective(seat.peerState, seat.friends) !== 'declined',
+        notify: !isQuiet(seat),
         peerId: seat.peerId,
       };
     });
@@ -384,23 +568,28 @@ export class MessagesService {
   async playablePeer(
     userId: string,
     conversationId: string,
+    /** Pass the transaction's connection when calling from inside one: asking the pool for a second connection while holding one can starve it. */
+    db: Pick<pg.Pool, 'query'> = this.pool,
   ): Promise<{ peerId: string; friends: boolean }> {
-    const seat = await this.seat(this.pool, userId, conversationId);
-    await this.assertReachable(this.pool, userId, seat.peerId);
+    const seat = await this.seat(db, userId, conversationId);
+    await this.assertReachable(db, userId, seat.peerId);
     return { peerId: seat.peerId, friends: seat.friends };
   }
 
   /** Marks everything up to now as read. Only an accepted conversation tells the sender. */
   async markRead(userId: string, conversationId: string): Promise<{ readAt: string }> {
     const now = this.clock();
-    const seat = await this.seat(this.pool, userId, conversationId);
+    const member = await this.membership(this.pool, userId, conversationId);
+    const seat =
+      member.kind === 'direct' ? await this.seat(this.pool, userId, conversationId) : null;
     await this.pool.query(
       `UPDATE conversation_members
           SET last_read_at = greatest(coalesce(last_read_at, $3), $3)
         WHERE conversation_id = $1 AND user_id = $2`,
       [conversationId, userId, now],
     );
-    if (effective(seat.myState, seat.friends) === 'active') {
+    // Only a direct chat tells the other person (groups and bots have no read receipts).
+    if (seat && effective(seat.myState, seat.friends) === 'active') {
       this.safePublish([seat.peerId], {
         type: 'read',
         conversationId,
@@ -429,17 +618,91 @@ export class MessagesService {
   }
 
   /**
-   * Who a typing signal from `userId` in this conversation should go to, or null if it shouldn't be sent
-   * (not a member, blocked, or the other person ignored the request).
+   * Who a typing signal from `userId` in this conversation should go to: nobody if it shouldn't be sent
+   * (not a member, blocked, the other person ignored the request, or it's a bot).
    */
-  async typingTarget(userId: string, conversationId: string): Promise<string | null> {
+  async typingTargets(userId: string, conversationId: string): Promise<string[]> {
     try {
+      const member = await this.membership(this.pool, userId, conversationId);
+      if (member.kind === 'group') {
+        return (await this.groupRecipients(this.pool, conversationId, userId)).filter(
+          (id) => id !== userId,
+        );
+      }
+      if (member.kind !== 'direct') return [];
       const seat = await this.seat(this.pool, userId, conversationId);
       await this.assertReachable(this.pool, userId, seat.peerId);
-      return effective(seat.peerState, seat.friends) === 'declined' ? null : seat.peerId;
+      return isQuiet(seat) ? [] : [seat.peerId];
     } catch {
-      return null;
+      return [];
     }
+  }
+
+  /**
+   * What `userId` may do in a conversation right now, for the services that act on messages (reactions,
+   * deletes, polls). Throws `conversation_not_found` for someone who isn't in it (or was removed) and, in a
+   * direct chat, for a blocked pair. `recipients` are who should hear about a change; `active` is false for
+   * a request you haven't accepted yet (you can read it, not react in it).
+   */
+  async access(
+    userId: string,
+    conversationId: string,
+  ): Promise<{
+    kind: 'direct' | 'group' | 'bot' | 'sms';
+    role: GroupRole;
+    active: boolean;
+    recipients: string[];
+  }> {
+    const member = await this.membership(this.pool, userId, conversationId);
+    if (member.kind === 'group') {
+      return {
+        kind: 'group',
+        role: member.role,
+        active: true,
+        recipients: await this.groupRecipients(this.pool, conversationId, userId),
+      };
+    }
+    if (member.kind === 'direct') {
+      const seat = await this.seat(this.pool, userId, conversationId);
+      await this.assertReachable(this.pool, userId, seat.peerId);
+      return {
+        kind: 'direct',
+        role: 'member',
+        active: effective(seat.myState, seat.friends) === 'active',
+        recipients: isQuiet(seat) ? [userId] : [userId, seat.peerId],
+      };
+    }
+    return { kind: member.kind, role: 'member', active: true, recipients: [userId] };
+  }
+
+  /** Your place in a conversation. Throws `conversation_not_found` if you are not in it (or left, or were removed). */
+  async membership(
+    db: Pick<pg.Pool, 'query'>,
+    userId: string,
+    conversationId: string,
+  ): Promise<Membership> {
+    const r = await db.query<{
+      kind: Membership['kind'];
+      bot_slug: string | null;
+      state: MemberState;
+      role: GroupRole;
+      joined_at: Date;
+    }>(
+      `SELECT c.kind, c.bot_slug, m.state, m.role, m.joined_at
+         FROM conversations c
+         JOIN conversation_members m ON m.conversation_id = c.id AND m.user_id = $1::uuid
+        WHERE c.id = $2::uuid AND m.state <> 'left'`,
+      [userId, conversationId],
+    );
+    const row = r.rows[0];
+    if (!row) throw new AuthError('conversation_not_found');
+    return {
+      kind: row.kind,
+      botSlug: row.bot_slug,
+      state: row.state,
+      role: row.role,
+      joinedAt: row.joined_at,
+    };
   }
 
   // ---- internals ------------------------------------------------------------------------------
@@ -458,8 +721,12 @@ export class MessagesService {
     userId: string,
     state: MemberState,
   ): Promise<void> {
+    // Answering a request (accepting, declining) takes it out of the spam bucket.
     await db.query(
-      `UPDATE conversation_members SET state = $3::member_state
+      `UPDATE conversation_members
+          SET state = $3::member_state,
+              filtered_at = CASE WHEN $3::member_state = 'request' THEN filtered_at END,
+              filter_reason = CASE WHEN $3::member_state = 'request' THEN filter_reason END
         WHERE conversation_id = $1 AND user_id = $2`,
       [conversationId, userId, state],
     );
@@ -503,12 +770,13 @@ export class MessagesService {
       peer: string;
       my_state: MemberState;
       peer_state: MemberState;
+      peer_filtered: boolean;
       peer_read: Date | null;
       last_message_at: Date | null;
       friends: boolean;
     }>(
       `SELECT o.user_id AS peer, m.state AS my_state, o.state AS peer_state,
-              o.last_read_at AS peer_read, c.last_message_at,
+              o.filtered_at IS NOT NULL AS peer_filtered, o.last_read_at AS peer_read, c.last_message_at,
               EXISTS (SELECT 1 FROM friendships f
                        WHERE f.user_low = LEAST($1::uuid, o.user_id) AND f.user_high = GREATEST($1::uuid, o.user_id)
                          AND f.status = 'accepted') AS friends
@@ -526,6 +794,7 @@ export class MessagesService {
       isNew: row.last_message_at === null,
       myState: row.my_state,
       peerState: row.peer_state,
+      peerFiltered: row.peer_filtered && row.peer_state === 'request' && !row.friends,
       peerReadAt: row.peer_read,
     };
   }
@@ -592,7 +861,7 @@ export class MessagesService {
     const cap = await readConfigInt(c, 'request_messages_before_accept', 3);
     const sent = await c.query<{ n: string }>(
       `SELECT count(*) AS n FROM messages
-        WHERE conversation_id = $1 AND sender_id = $2 AND deleted_at IS NULL`,
+        WHERE conversation_id = $1 AND sender_id = $2`,
       [conversationId, userId],
     );
     if (Number(sent.rows[0]?.n ?? 0) >= cap) throw new AuthError('request_pending');
@@ -636,13 +905,14 @@ export class MessagesService {
               ${RELATIONSHIP_EXPR} AS relationship,
               CASE WHEN f.status = 'accepted' AND m.state IN ('request', 'declined') THEN 'active'
                    ELSE m.state::text END AS state,
+              m.filtered_at,
               (SELECT count(*)::int FROM (
                  SELECT 1 FROM messages x
                   WHERE x.conversation_id = c.id AND x.sender_id <> $1::uuid AND x.deleted_at IS NULL
                     AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at)
                   LIMIT 99) s) AS unread,
               lm.id AS m_id, lm.sender_id AS m_sender, lm.kind AS m_kind, lm.body AS m_body,
-              lm.payload AS m_payload, lm.created_at AS m_created
+              lm.payload AS m_payload, lm.created_at AS m_created, lm.deleted_at AS m_deleted
          FROM conversation_members m
          JOIN conversations c ON c.id = m.conversation_id AND c.kind = 'direct'
          JOIN conversation_members o ON o.conversation_id = c.id AND o.user_id <> $1::uuid
@@ -650,9 +920,10 @@ export class MessagesService {
          JOIN profiles p ON p.id = u.id
          ${FRIENDSHIP_JOIN}
          LEFT JOIN LATERAL (
-           SELECT id, sender_id, kind, body, payload, created_at FROM messages
-            WHERE conversation_id = c.id AND deleted_at IS NULL
-            ORDER BY created_at DESC, id DESC LIMIT 1) lm ON true
+           SELECT x.id, x.sender_id, x.kind, x.body, x.payload, x.created_at, x.deleted_at FROM messages x
+            WHERE x.conversation_id = c.id
+              AND NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = x.id AND h.user_id = $1::uuid)
+            ORDER BY x.created_at DESC, x.id DESC LIMIT 1) lm ON true
         WHERE ${where}
         ORDER BY coalesce(c.last_message_at, c.created_at) DESC
         LIMIT 200`,
@@ -661,9 +932,75 @@ export class MessagesService {
     // An ignored request is hidden from lists; a conversation opened by id (detail) still resolves.
     return opts.conversationId ? r.rows : r.rows.filter((row) => row.state !== 'declined');
   }
+
+  /** The list/detail rows of the groups and bots `userId` is in (people who left are not listed). */
+  private async groupSummaries(
+    db: Pick<pg.Pool, 'query'>,
+    userId: string,
+    opts: { conversationId?: string },
+  ): Promise<GroupSummaryRow[]> {
+    const params: unknown[] = [userId];
+    let where = `m.user_id = $1::uuid AND m.state = 'active'`;
+    if (opts.conversationId) {
+      params.push(opts.conversationId);
+      where += ` AND c.id = $${params.length}::uuid`;
+    }
+    const hidden = (x: string) =>
+      `NOT EXISTS (SELECT 1 FROM message_hides h WHERE h.message_id = ${x}.id AND h.user_id = $1::uuid)`;
+    const blockedSender = (x: string) =>
+      `NOT EXISTS (SELECT 1 FROM blocks b WHERE b.blocker_id = $1::uuid AND b.blocked_id = ${x}.sender_id)`;
+    const r = await db.query<GroupSummaryRow>(
+      `SELECT c.id, c.kind, c.title, c.photo_url, c.bot_slug, m.role,
+              (SELECT count(*)::int FROM conversation_members gm
+                WHERE gm.conversation_id = c.id AND gm.state = 'active') AS member_count,
+              (SELECT coalesce(jsonb_agg(jsonb_build_object(
+                        'id', x.id, 'username', x.username, 'display_name', x.display_name, 'avatar', x.avatar)), '[]'::jsonb)
+                 FROM (SELECT p.id, p.username, p.display_name, p.avatar
+                         FROM conversation_members gm JOIN profiles p ON p.id = gm.user_id
+                        WHERE gm.conversation_id = c.id AND gm.state = 'active' AND gm.user_id <> $1::uuid
+                        ORDER BY gm.joined_at, gm.user_id LIMIT 3) x) AS preview,
+              (SELECT count(*)::int FROM (
+                 SELECT 1 FROM messages x
+                  WHERE x.conversation_id = c.id AND x.sender_id IS DISTINCT FROM $1::uuid
+                    AND x.deleted_at IS NULL AND x.kind <> 'system' AND x.created_at >= m.joined_at
+                    AND (m.last_read_at IS NULL OR x.created_at > m.last_read_at)
+                    AND ${hidden('x')} AND ${blockedSender('x')}
+                  LIMIT 99) s) AS unread,
+              EXISTS (SELECT 1 FROM messages x WHERE x.conversation_id = c.id AND x.sender_id = $1::uuid
+                       AND x.kind = 'text') AS has_user_msg,
+              lm.id AS m_id, lm.sender_id AS m_sender, lm.kind AS m_kind, lm.body AS m_body,
+              lm.payload AS m_payload, lm.created_at AS m_created, lm.deleted_at AS m_deleted,
+              coalesce(nullif(sp.display_name, ''), sp.username) AS m_sender_name
+         FROM conversation_members m
+         JOIN conversations c ON c.id = m.conversation_id AND c.kind IN ('group', 'bot')
+         LEFT JOIN LATERAL (
+           SELECT x.id, x.sender_id, x.kind, x.body, x.payload, x.created_at, x.deleted_at FROM messages x
+            WHERE x.conversation_id = c.id AND x.created_at >= m.joined_at
+              AND ${hidden('x')} AND ${blockedSender('x')}
+            ORDER BY x.created_at DESC, x.id DESC LIMIT 1) lm ON true
+         LEFT JOIN profiles sp ON sp.id = lm.sender_id
+        WHERE ${where}
+        ORDER BY coalesce(c.last_message_at, c.created_at) DESC
+        LIMIT 200`,
+      params,
+    );
+    return r.rows;
+  }
+}
+
+/** The Bots tab keeps the catalogue's order (Coach Cue, Quiz Mama, Word Hunt Trainer, Admiral Ade). */
+const BOT_ORDER: string[] = BOTS.map((b) => b.slug);
+function botOrder(a: ConversationSummary, b: ConversationSummary): number {
+  const at = (c: ConversationSummary) => BOT_ORDER.indexOf(c.bot?.slug ?? '');
+  return at(a) - at(b);
 }
 
 const directKey = (a: string, b: string): string => (a < b ? `${a}:${b}` : `${b}:${a}`);
+
+/** The other person gets no live events from you: they ignored the request, or the spam filter set it aside. */
+function isQuiet(seat: Seat): boolean {
+  return effective(seat.peerState, seat.friends) === 'declined' || seat.peerFiltered;
+}
 
 /** A request between friends is just a chat. */
 function effective(state: MemberState, friends: boolean): MemberState {
@@ -693,8 +1030,56 @@ function toSummary(row: SummaryRow): ConversationSummary {
             body: row.m_body,
             payload: row.m_payload,
             created_at: row.m_created,
+            deleted_at: row.m_deleted,
           })
         : null,
     unread: row.unread,
+  };
+}
+
+/** A group or bot as a list row. `started`: you have said something to it (bots only appear in All then). */
+function toGroupSummary(row: GroupSummaryRow): { summary: ConversationSummary; started: boolean } {
+  const last: Message | null =
+    row.m_id && row.m_kind && row.m_created
+      ? toMessage({
+          id: row.m_id,
+          conversation_id: row.id,
+          sender_id: row.m_sender,
+          kind: row.m_kind,
+          body: row.m_body,
+          payload: row.m_payload,
+          created_at: row.m_created,
+          deleted_at: row.m_deleted,
+          bot_slug: row.bot_slug,
+        })
+      : null;
+  const lastMessage =
+    last && row.kind === 'group' && row.m_sender_name && last.kind !== 'system'
+      ? { ...last, senderName: row.m_sender_name }
+      : last;
+  const base = { id: row.id, state: 'active' as const, lastMessage, unread: row.unread };
+  if (row.kind === 'bot') {
+    const bot = botBySlug(row.bot_slug ?? '');
+    // A bot we no longer ship is left out of the lists rather than breaking them.
+    if (bot) return { summary: { ...base, kind: 'bot', bot }, started: row.has_user_msg };
+  }
+  return {
+    summary: {
+      ...base,
+      kind: 'group',
+      group: {
+        title: row.title ?? '',
+        photoUrl: row.photo_url,
+        memberCount: row.member_count,
+        role: row.role,
+        members: row.preview.map((p) => ({
+          id: p.id,
+          username: p.username,
+          displayName: p.display_name,
+          avatar: parseAvatar(p.avatar),
+        })),
+      },
+    },
+    started: row.has_user_msg,
   };
 }

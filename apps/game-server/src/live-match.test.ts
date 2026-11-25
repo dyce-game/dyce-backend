@@ -1,9 +1,15 @@
-import { LIVE_GAMES, whotEngine, type WhotAction, type WhotState } from '@dyce/games';
-import type { LiveResultRow } from '@dyce/shared';
-import { LiveMatch, type LiveMatchOptions, type Scheduler } from './live-match.ts';
-import type { FinalOutcome, LiveMatchStore, LoadedMatch } from './store.ts';
+import {
+  LIVE_GAMES,
+  whotEngine,
+  type TurnGame,
+  type WhotAction,
+  type WhotState,
+} from '@dyce/games';
+import { LiveMatch, type LiveMatchOptions } from './live-match.ts';
+import type { LoadedMatch } from './store.ts';
+import { FakeScheduler, MemoryStore, flush } from './testing.ts';
 
-const game = LIVE_GAMES.whot!;
+const game = LIVE_GAMES.whot as TurnGame;
 const OPTS: LiveMatchOptions = {
   reconnectMs: 60_000,
   joinGraceMs: 90_000,
@@ -11,75 +17,6 @@ const OPTS: LiveMatchOptions = {
   settleRetries: 2,
   settleRetryMs: 1000,
 };
-
-/** Time that only moves when the test says so. */
-class FakeScheduler implements Scheduler {
-  t = 1_000_000;
-  private seq = 0;
-  private timers: { id: number; at: number; fn: () => void }[] = [];
-  now = () => this.t;
-  setTimeout(fn: () => void, ms: number): unknown {
-    const id = ++this.seq;
-    this.timers.push({ id, at: this.t + ms, fn });
-    return id;
-  }
-  clearTimeout(h: unknown): void {
-    this.timers = this.timers.filter((x) => x.id !== h);
-  }
-  async advance(ms: number): Promise<void> {
-    const target = this.t + ms;
-    for (;;) {
-      await flush();
-      const due = this.timers
-        .filter((x) => x.at <= target)
-        .sort((a, b) => a.at - b.at || a.id - b.id)[0];
-      if (!due) break;
-      this.timers = this.timers.filter((x) => x !== due);
-      this.t = Math.max(this.t, due.at);
-      due.fn();
-    }
-    this.t = target;
-    await flush();
-  }
-}
-const flush = async () => {
-  for (let i = 0; i < 6; i++) await new Promise((r) => setImmediate(r));
-};
-
-class MemoryStore implements LiveMatchStore {
-  moves: { seq: number; userId: string; action: unknown }[] = [];
-  forfeits: string[] = [];
-  finished: { outcome: FinalOutcome; state: unknown }[] = [];
-  failFinish = 0;
-  async load(): Promise<LoadedMatch | null> {
-    return null;
-  }
-  async saveMove(m: { seq: number; userId: string; action: unknown }): Promise<void> {
-    this.moves.push({ seq: m.seq, userId: m.userId, action: m.action });
-  }
-  async saveForfeits(_id: string, forfeited: string[]): Promise<void> {
-    this.forfeits = [...forfeited];
-  }
-  async finish(_id: string, outcome: FinalOutcome, state: unknown): Promise<LiveResultRow[]> {
-    if (this.failFinish > 0) {
-      this.failFinish -= 1;
-      throw new Error('db down');
-    }
-    this.finished.push({ outcome, state });
-    return outcome.placements.flatMap((g, i) =>
-      g.map((userId) => ({
-        userId,
-        placement: i + 1,
-        result: outcome.forfeited.includes(userId)
-          ? ('forfeit' as const)
-          : i === 0
-            ? ('win' as const)
-            : ('loss' as const),
-        payoutKobo: null,
-      })),
-    );
-  }
-}
 
 const IDS = ['u1', 'u2', 'u3', 'u4'];
 
@@ -366,7 +303,7 @@ describe('finishing', () => {
     // the persisted moves replay to the same final state
     let replay = whotEngine.init(IDS, 99n, {});
     for (const mv of store.moves)
-      replay = whotEngine.apply(replay, mv.userId, mv.action as WhotAction);
+      replay = whotEngine.apply(replay, mv.userId!, mv.action as WhotAction);
     expect(JSON.stringify(replay)).toBe(JSON.stringify(match.state));
   });
 

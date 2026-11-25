@@ -2,7 +2,7 @@ import { z } from 'zod';
 import type { AvatarConfig } from './avatar.ts';
 
 /**
- * SMS invites and the guest web game (SPEC "Sending a game to a non-Dyce contact", docs/DECISIONS.md ADR-020).
+ * SMS invites and the guest web game (SPEC "Sending a game to a non-Dyce contact", docs/DECISIONS.md ADR-021).
  *
  * An invite is a row keyed by a random token; the invitee's number is only ever stored as a keyed hash. The
  * link in the text is `<base>/i/<token>#p=<digits>`: the fragment carries the number back to the invitee's own

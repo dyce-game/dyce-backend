@@ -1,7 +1,7 @@
 import { z } from 'zod';
 
 /**
- * Money is integer kobo. ₦1 = 100 kobo. Never floats.
+ * Money is integer kobo. Ð1 = 100 kobo. Never floats.
  * In Postgres this is `bigint`; in TS it is a number inside the safe-integer range,
  * branded so a raw number can't be passed where kobo is expected.
  */
@@ -9,7 +9,7 @@ export type Kobo = number & { readonly __brand: 'Kobo' };
 
 export const KOBO_PER_NAIRA = 100;
 
-/** Starting grant: ₦200,000. */
+/** Starting grant: Ð200,000. */
 export const WELCOME_GRANT_KOBO = nairaToKobo(200_000);
 
 export function isKobo(n: unknown): n is Kobo {

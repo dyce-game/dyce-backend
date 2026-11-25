@@ -1,6 +1,10 @@
 export type AuthErrorCode =
   | 'validation_failed'
   | 'invalid_phone'
+  | 'invalid_email'
+  | 'email_failed'
+  | 'email_auth_disabled'
+  | 'identity_taken'
   | 'otp_resend_too_soon'
   | 'otp_rate_limited'
   | 'otp_invalid'
@@ -29,6 +33,18 @@ export type AuthErrorCode =
   | 'message_id_taken'
   | 'request_pending'
   | 'message_requests_rate_limited'
+  // groups, bots, message actions
+  | 'not_group_admin'
+  | 'group_full'
+  | 'group_id_taken'
+  | 'group_member_not_friend'
+  | 'groups_rate_limited'
+  | 'message_not_found'
+  | 'cannot_delete_message'
+  | 'delete_window_closed'
+  | 'invalid_vote'
+  | 'not_a_group'
+  | 'last_admin'
   // wallet
   | 'recipient_not_reachable'
   | 'transaction_not_found'
@@ -64,6 +80,20 @@ export type AuthErrorCode =
   | 'invalid_payout'
   | 'spaces_limit'
   | 'room_unavailable'
+  | 'invalid_options'
+  | 'resign_not_supported'
+  | 'dispute_not_allowed'
+  | 'dispute_window_closed'
+  | 'dispute_exists'
+  | 'disputes_rate_limited'
+  | 'username_mismatch'
+  // quick match
+  | 'quick_match_unavailable'
+  | 'quick_match_active'
+  | 'quick_match_not_found'
+  | 'quick_match_expired'
+  | 'quick_match_rate_limited'
+  | 'quick_match_cooldown'
   // invites and the guest web game
   | 'invite_not_found'
   | 'invite_expired'
@@ -74,11 +104,23 @@ export type AuthErrorCode =
   | 'invite_too_soon'
   | 'guest_unauthorized'
   | 'guest_already_played'
-  | 'guest_game_unavailable';
+  | 'guest_game_unavailable'
+  // discovery and notifications
+  | 'search_rate_limited'
+  // trust and safety (ADR-039)
+  | 'account_suspended'
+  | 'account_muted'
+  | 'integrity_check_failed'
+  | 'money_requests_rate_limited'
+  | 'stranger_scans_rate_limited';
 
 const STATUS: Record<AuthErrorCode, number> = {
   validation_failed: 422,
   invalid_phone: 422,
+  invalid_email: 422,
+  email_failed: 502,
+  email_auth_disabled: 404,
+  identity_taken: 409,
   otp_resend_too_soon: 429,
   otp_rate_limited: 429,
   otp_invalid: 400,
@@ -105,6 +147,17 @@ const STATUS: Record<AuthErrorCode, number> = {
   message_id_taken: 409,
   request_pending: 429,
   message_requests_rate_limited: 429,
+  not_group_admin: 403,
+  group_full: 409,
+  group_id_taken: 409,
+  group_member_not_friend: 403,
+  groups_rate_limited: 429,
+  message_not_found: 404,
+  cannot_delete_message: 403,
+  delete_window_closed: 409,
+  invalid_vote: 422,
+  not_a_group: 409,
+  last_admin: 409,
   recipient_not_reachable: 403,
   transaction_not_found: 404,
   reports_rate_limited: 429,
@@ -136,6 +189,19 @@ const STATUS: Record<AuthErrorCode, number> = {
   invalid_payout: 422,
   spaces_limit: 429,
   room_unavailable: 503,
+  invalid_options: 422,
+  resign_not_supported: 409,
+  dispute_not_allowed: 403,
+  dispute_window_closed: 409,
+  dispute_exists: 409,
+  disputes_rate_limited: 429,
+  username_mismatch: 422,
+  quick_match_unavailable: 422,
+  quick_match_active: 409,
+  quick_match_not_found: 404,
+  quick_match_expired: 410,
+  quick_match_rate_limited: 429,
+  quick_match_cooldown: 429,
   invite_not_found: 404,
   invite_expired: 410,
   invite_used: 410,
@@ -146,6 +212,12 @@ const STATUS: Record<AuthErrorCode, number> = {
   guest_unauthorized: 401,
   guest_already_played: 409,
   guest_game_unavailable: 422,
+  search_rate_limited: 429,
+  account_suspended: 403,
+  account_muted: 403,
+  integrity_check_failed: 403,
+  money_requests_rate_limited: 429,
+  stranger_scans_rate_limited: 429,
 };
 
 /** An expected, user-facing failure. Mapped to `{ code, message, ...details }` by the HTTP filter. */

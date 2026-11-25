@@ -143,7 +143,7 @@ describe('what blocking cuts off', () => {
     await expect(chat.send(me.id, conv, { id: randomUUID(), body: 'x' })).rejects.toEqual(
       code('blocked'),
     );
-    expect(await chat.typingTarget(them.id, conv)).toBeNull();
+    expect(await chat.typingTargets(them.id, conv)).toEqual([]);
   });
 
   it('brings the chat back when you unblock (the history was never deleted)', async () => {

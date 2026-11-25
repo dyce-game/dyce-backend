@@ -9,6 +9,7 @@ import {
   type GameInfo,
   type GamesResponse,
   type MatchMode,
+  type MatchOptions,
   type MatchPlayer,
   type MatchPlayerResult,
   type MatchStatus,
@@ -24,7 +25,7 @@ import { parseDbError, DyceError } from '../common/dyce-error.ts';
 import { readConfigInt, secondsUntilLagosMidnight } from '../db/config.ts';
 import { withTx } from '../db/tx.ts';
 import { lockPair } from '../social/relationship.ts';
-import { ENGINES, type EngineEntry } from './engines.ts';
+import { ENGINES, resolveOptions, variantLabelOf, type EngineEntry } from './engines.ts';
 
 /** Where live events go (the WebSocket hub; tests pass a recorder). */
 export interface MatchPublisher {
@@ -36,6 +37,7 @@ export interface MatchChat {
   playablePeer(
     userId: string,
     conversationId: string,
+    db?: Pick<pg.Pool, 'query'>,
   ): Promise<{ peerId: string; friends: boolean }>;
   postCard(
     conversationId: string,
@@ -69,6 +71,8 @@ type MatchRow = {
   created_at: Date;
   finished_at: Date | null;
   invite_expires_at: Date | null;
+  options: MatchOptions;
+  turn_deadline: Date | null;
 };
 
 type PlayerRow = {
@@ -88,7 +92,7 @@ type Db = Pick<pg.Pool, 'query'>;
 
 const MATCH_COLUMNS = `m.id, m.game_slug, g.name AS game_name, m.mode, m.stake_kobo, m.allow_counter, m.counter_stake_kobo, m.status, m.conversation_id,
   m.seed, m.state, m.state_version, m.current_turn, m.created_by, m.created_at, m.finished_at,
-  m.invite_expires_at`;
+  m.invite_expires_at, m.options, m.turn_deadline`;
 
 /**
  * Async 1v1 matches played from a chat card.
@@ -133,8 +137,10 @@ export class MatchesService {
       max_players: number;
       categories: string[];
       supports_pool: boolean;
+      pool_min_stake_kobo: string | null;
     }>(
-      `SELECT slug, name, dimension, sync, min_players, max_players, categories, supports_pool
+      `SELECT slug, name, dimension, sync, min_players, max_players, categories, supports_pool,
+              pool_min_stake_kobo
          FROM games WHERE enabled ORDER BY name`,
     );
     const games: GameInfo[] = r.rows
@@ -148,6 +154,10 @@ export class MatchesService {
         maxPlayers: g.max_players,
         categories: g.categories,
         supportsPool: g.supports_pool,
+        poolMinKobo: g.pool_min_stake_kobo === null ? null : Number(g.pool_min_stake_kobo),
+        ...((this.entry(g.slug)?.options?.length ?? 0) > 0
+          ? { options: this.entry(g.slug)!.options }
+          : {}),
       }));
     return { games };
   }
@@ -221,7 +231,10 @@ export class MatchesService {
     const mode = input.mode ?? 'free';
     const stake = mode === 'pool' ? (input.stakeKobo ?? 0) : 0;
     const allowCounter = mode === 'pool' ? (input.allowCounter ?? true) : false;
-    if (this.entry(input.gameSlug) === null) throw new AuthError('game_not_found');
+    const gameEntry = this.entry(input.gameSlug);
+    if (gameEntry === null) throw new AuthError('game_not_found');
+    const variant = resolveOptions(gameEntry, input.options);
+    if (mode === 'pool' && !variant.poolOk) throw new AuthError('pool_not_supported');
 
     const { peerId, friends } = await this.chat.playablePeer(userId, input.conversationId);
     if (!friends) throw new AuthError('match_requires_friends');
@@ -234,30 +247,39 @@ export class MatchesService {
         conversation_id: string | null;
         mode: MatchMode;
         game_slug: string;
-      }>(`SELECT created_by, conversation_id, mode, game_slug FROM matches WHERE id = $1`, [
-        input.id,
-      ]);
+        options: MatchOptions;
+      }>(
+        `SELECT created_by, conversation_id, mode, game_slug, options FROM matches WHERE id = $1`,
+        [input.id],
+      );
       const e = existing.rows[0];
       if (e) {
         if (
           e.created_by !== userId ||
           e.conversation_id !== input.conversationId ||
           e.mode !== mode ||
-          e.game_slug !== input.gameSlug
+          e.game_slug !== input.gameSlug ||
+          !isDeepStrictEqual(e.options, variant.options)
         ) {
           throw new AuthError('message_id_taken');
         }
         return; // a retry
       }
 
-      const game = await c.query<{ enabled: boolean; supports_pool: boolean }>(
-        `SELECT enabled, supports_pool FROM games WHERE slug = $1`,
-        [input.gameSlug],
-      );
-      if (!game.rows[0]?.enabled) throw new AuthError('game_not_found');
+      const game = await c.query<{
+        enabled: boolean;
+        supports_pool: boolean;
+        pool_min_stake_kobo: string | null;
+      }>(`SELECT enabled, supports_pool, pool_min_stake_kobo FROM games WHERE slug = $1`, [
+        input.gameSlug,
+      ]);
+      // A game is playable when its row is enabled AND the registry has an engine for it.
+      if (!game.rows[0]?.enabled || this.entry(input.gameSlug) === null) {
+        throw new AuthError('game_not_found');
+      }
       if (mode === 'pool') {
         if (!game.rows[0].supports_pool) throw new AuthError('pool_not_supported');
-        await this.assertStakeInRange(c, stake);
+        await this.assertStakeInRange(c, stake, game.rows[0].pool_min_stake_kobo);
       }
 
       const limit = await readConfigInt(c, 'open_match_invites_per_chat', 5);
@@ -273,8 +295,8 @@ export class MatchesService {
       const expires = new Date(now.getTime() + ttlHours * 3_600_000);
       await c.query(
         `INSERT INTO matches (id, game_slug, mode, stake_kobo, allow_counter, status, conversation_id, seed,
-                              created_by, created_at, invite_expires_at)
-         VALUES ($1, $2, $8, $9, $10, 'invited', $3, $4, $5, $6, $7)`,
+                              created_by, created_at, invite_expires_at, options)
+         VALUES ($1, $2, $8, $9, $10, 'invited', $3, $4, $5, $6, $7, $11::jsonb)`,
         [
           input.id,
           input.gameSlug,
@@ -286,6 +308,7 @@ export class MatchesService {
           mode,
           stake,
           allowCounter,
+          JSON.stringify(variant.options),
         ],
       );
       await c.query(
@@ -305,7 +328,7 @@ export class MatchesService {
       id: input.id,
       kind: 'game',
       body: `${row.game_name} · ${row.mode === 'pool' ? 'Pool' : 'Free'}`,
-      payload: cardPayload(row, players),
+      payload: cardPayload(row, players, this.entry(row.game_slug)),
     });
     this.publishMatch(row, players);
     return this.toView(row, players, userId);
@@ -371,7 +394,7 @@ export class MatchesService {
       const state = entry.engine.init(
         players.map((p) => p.user_id),
         BigInt(row.seed),
-        entry.cfg,
+        resolveOptions(entry, row.options).cfg,
       );
       const turn = entry.engine.currentPlayers(state)[0] ?? null;
       await c.query(
@@ -379,9 +402,10 @@ export class MatchesService {
         [matchId, invitee, this.clock()],
       );
       await c.query(
-        `UPDATE matches SET status = 'active', state = $2::jsonb, state_version = 0, current_turn = $3
+        `UPDATE matches SET status = 'active', state = $2::jsonb, state_version = 0, current_turn = $3,
+                            turn_deadline = $4
           WHERE id = $1`,
-        [matchId, JSON.stringify(state), turn],
+        [matchId, JSON.stringify(state), turn, await this.turnDeadline(c, row.mode)],
       );
       return true;
     });
@@ -409,7 +433,13 @@ export class MatchesService {
       if (row.mode !== 'pool' || !row.allow_counter) throw new AuthError('counter_not_allowed');
       const stake = Number(row.stake_kobo);
       if (input.stakeKobo >= stake) throw new AuthError('invalid_stake');
-      if (input.stakeKobo > 0) await this.assertStakeInRange(c, input.stakeKobo);
+      if (input.stakeKobo > 0) {
+        const g = await c.query<{ pool_min_stake_kobo: string | null }>(
+          `SELECT pool_min_stake_kobo FROM games WHERE slug = $1`,
+          [row.game_slug],
+        );
+        await this.assertStakeInRange(c, input.stakeKobo, g.rows[0]?.pool_min_stake_kobo ?? null);
+      }
 
       // They must be able to honour their own offer.
       const me = await c.query<{ is_adult: boolean; pool_frozen: boolean; balance: string }>(
@@ -461,6 +491,18 @@ export class MatchesService {
         ({ row, players } = await this.load(this.pool, matchId));
       }
     }
+    if (row.status === 'active' && row.mode === 'pool' && row.turn_deadline !== null) {
+      if (row.turn_deadline.getTime() <= this.clock().getTime()) {
+        const settled = await withTx(this.pool, async (c) => {
+          const l = await this.lock(c, matchId, userId);
+          return this.settleIfOverdue(c, l.row, l.players);
+        });
+        if (settled) {
+          await this.afterChange(matchId);
+          ({ row, players } = await this.load(this.pool, matchId));
+        }
+      }
+    }
     return this.toView(row, players, userId);
   }
 
@@ -474,6 +516,10 @@ export class MatchesService {
       const { row, players } = await this.lock(c, matchId, userId);
       const entry = this.engineFor(row.game_slug);
       const { engine } = entry;
+
+      // Pool: the clock ran out before this move arrived, so the forfeit comes first (ADR-041). The move is
+      // not applied; the caller gets the finished match.
+      if (await this.settleIfOverdue(c, row, players)) return { changed: true };
 
       let action: unknown = input.action;
       if (engine.actionSchema) {
@@ -497,7 +543,7 @@ export class MatchesService {
       }
 
       // A block placed mid-match ends the interaction.
-      if (row.conversation_id) await this.chat.playablePeer(userId, row.conversation_id);
+      if (row.conversation_id) await this.chat.playablePeer(userId, row.conversation_id, c);
       if (row.status !== 'active') throw new AuthError('match_not_open');
 
       const state = row.state;
@@ -529,8 +575,15 @@ export class MatchesService {
       const over = engine.isTerminal(next);
       const turn = over ? null : (engine.currentPlayers(next)[0] ?? null);
       await c.query(
-        `UPDATE matches SET state = $2::jsonb, state_version = $3, current_turn = $4 WHERE id = $1`,
-        [matchId, JSON.stringify(next), seq, turn],
+        `UPDATE matches SET state = $2::jsonb, state_version = $3, current_turn = $4, turn_deadline = $5
+          WHERE id = $1`,
+        [
+          matchId,
+          JSON.stringify(next),
+          seq,
+          turn,
+          over ? null : await this.turnDeadline(c, row.mode),
+        ],
       );
 
       if (over) {
@@ -548,7 +601,7 @@ export class MatchesService {
         }
         // Free: marks the match finished. Pool: pays the escrow out by placement (a draw refunds both
         // stakes) in the same transaction, so a finished match and its payout can never disagree.
-        await this.money(() => c.query(`SELECT settle_match($1)`, [matchId]));
+        await this.money(() => c.query(`SELECT settle_or_hold($1)`, [matchId]));
       }
       return { changed: true };
     });
@@ -558,7 +611,36 @@ export class MatchesService {
   }
 
   /**
-   * Turns an SMS invite into a normal Free match once the invitee has signed up (ADR-020). `id` is the invite's
+   * Gives up a running 1v1 match from the game menu (SPEC section 9, ADR-037): the other player wins and a Pool pot
+   * goes to them through the same `settle_match` as any result. Anything else is refused: a match that has not
+   * started or is over (`match_not_open`), or one with more than two players, where resigning would need the
+   * engine to rank the rest (`resign_not_supported`). A retry after it worked changes nothing.
+   */
+  async resign(userId: string, matchId: string): Promise<MatchView> {
+    const result = await withTx(this.pool, async (c) => {
+      const { row, players } = await this.lock(c, matchId, userId);
+      const meta = await c.query<{ resigned_by: string | null }>(
+        `SELECT live_meta ->> 'resignedBy' AS resigned_by FROM matches WHERE id = $1`,
+        [matchId],
+      );
+      if (
+        (row.status === 'finished' || row.status === 'disputed') &&
+        meta.rows[0]?.resigned_by === userId
+      )
+        return { changed: false };
+      if (row.status !== 'active') throw new AuthError('match_not_open');
+      if (players.length !== 2) throw new AuthError('resign_not_supported');
+      // A Pool match whose clock already ran out is settled by the clock first, not by this resignation.
+      if (await this.settleIfOverdue(c, row, players)) return { changed: true };
+      await this.forfeit(c, matchId, players, userId, 'resign');
+      return { changed: true };
+    });
+    if (result.changed) await this.afterChange(matchId);
+    return this.get(userId, matchId);
+  }
+
+  /**
+   * Turns an SMS invite into a normal Free match once the invitee has signed up (ADR-021). `id` is the invite's
    * id, so a retry is harmless. With `played` (the moves a guest made in the browser, already screened) the new
    * user's turn is replayed through the engine on the guest's own seed: they keep their score and the inviter
    * plays next. Without it the inviter simply sends the game as a fresh invite. Returns the match id.
@@ -631,13 +713,107 @@ export class MatchesService {
       id: input.id,
       kind: 'game',
       body: `${row.game_name} · Free`,
-      payload: cardPayload(row, players),
+      payload: cardPayload(row, players, this.entry(row.game_slug)),
     });
     this.publishMatch(row, players);
     return input.id;
   }
 
+  /**
+   * Pool matches nobody moved in for `pool_turn_hours` (24): the player whose move it was forfeits (SPEC section 9),
+   * or, when both were due (a game where both play at once and nobody moved), every stake goes back. Players also
+   * trigger this by opening or moving in an overdue match; this sweep is for matches nobody opens again, so a
+   * stake is never stuck behind someone who left. Free matches have no clock.
+   */
+  async forfeitOverdueMatches(limit = 100): Promise<number> {
+    const due = await this.pool.query<{ id: string }>(
+      `SELECT id FROM matches
+        WHERE status = 'active' AND mode = 'pool' AND turn_deadline IS NOT NULL AND turn_deadline <= $1
+        ORDER BY turn_deadline LIMIT $2`,
+      [this.clock(), limit],
+    );
+    let n = 0;
+    for (const { id } of due.rows) {
+      const done = await withTx(this.pool, async (c) => {
+        const { row, players } = await this.load(c, id, true);
+        return this.settleIfOverdue(c, row, players);
+      });
+      if (done) {
+        await this.afterChange(id);
+        n += 1;
+      }
+    }
+    return n;
+  }
+
   // ---- internals ------------------------------------------------------------------------------
+
+  /** When the player(s) to move forfeit: `pool_turn_hours` from now for a Pool match, none for Free. */
+  private async turnDeadline(db: Db, mode: MatchMode): Promise<Date | null> {
+    if (mode !== 'pool') return null;
+    const hours = await readConfigInt(db, 'pool_turn_hours', 24);
+    return new Date(this.clock().getTime() + hours * 3_600_000);
+  }
+
+  /**
+   * The loser of a 1v1 match is placed last and the other player wins, through the same `settle_or_hold` as a
+   * final move (so a Pool pot is paid, or held for a person to look at, exactly as for a played-out result).
+   */
+  private async forfeit(
+    c: pg.PoolClient,
+    matchId: string,
+    players: PlayerRow[],
+    loserId: string,
+    reason: 'resign' | 'timeout',
+  ): Promise<void> {
+    for (const p of players) {
+      const mine = p.user_id === loserId;
+      await c.query(
+        `UPDATE match_players SET placement = $3, result = $4::match_result
+          WHERE match_id = $1 AND user_id = $2`,
+        [matchId, p.user_id, mine ? 2 : 1, mine ? 'forfeit' : 'win'],
+      );
+    }
+    await c.query(
+      `UPDATE matches SET current_turn = NULL, turn_deadline = NULL,
+              live_meta = live_meta || jsonb_build_object('forfeitedBy', $2::text, 'forfeitReason', $3::text)
+                                    || CASE WHEN $3::text = 'resign'
+                                            THEN jsonb_build_object('resignedBy', $2::text) ELSE '{}'::jsonb END
+        WHERE id = $1`,
+      [matchId, loserId, reason],
+    );
+    await this.money(() => c.query(`SELECT settle_or_hold($1)`, [matchId]));
+  }
+
+  /**
+   * If a running Pool match's clock has run out, settles it and returns true (the caller commits and reports the
+   * finished match). The one player on the clock forfeits; if everyone was due the match is cancelled and every
+   * stake refunded. Under the match row lock, so it happens once however many callers arrive together.
+   */
+  private async settleIfOverdue(
+    c: pg.PoolClient,
+    row: MatchRow,
+    players: PlayerRow[],
+  ): Promise<boolean> {
+    if (row.status !== 'active' || row.mode !== 'pool' || row.turn_deadline === null) return false;
+    if (row.turn_deadline.getTime() > this.clock().getTime()) return false;
+    const entry = this.entry(row.game_slug);
+    const due = entry
+      ? players.filter((p) => entry.engine.currentPlayers(row.state).includes(p.user_id))
+      : [];
+    if (players.length === 2 && due.length === 1) {
+      await this.forfeit(c, row.id, players, due[0]!.user_id, 'timeout');
+      return true;
+    }
+    await c.query(
+      `UPDATE matches SET current_turn = NULL, turn_deadline = NULL,
+              live_meta = live_meta || jsonb_build_object('abandoned', true)
+        WHERE id = $1`,
+      [row.id],
+    );
+    await this.money(() => c.query(`SELECT refund_match($1, 'cancelled')`, [row.id]));
+    return true;
+  }
 
   private entry(slug: string): EngineEntry | null {
     const e = this.engines[slug];
@@ -676,9 +852,19 @@ export class MatchesService {
     }
   }
 
-  /** The stake limits from config (docs/SPEC.md section 9). */
-  private async assertStakeInRange(c: Db, stake: number): Promise<void> {
-    const min = await readConfigInt(c, 'pool_min_stake_kobo', 10_000);
+  /**
+   * The stake limits from config (docs/SPEC.md section 9). A game may ask for more than the platform
+   * minimum (`games.pool_min_stake_kobo`, from docs/GAMES.md): the higher of the two applies.
+   */
+  private async assertStakeInRange(
+    c: Db,
+    stake: number,
+    gameMin: string | number | null = null,
+  ): Promise<void> {
+    const min = Math.max(
+      await readConfigInt(c, 'pool_min_stake_kobo', 10_000),
+      gameMin === null ? 0 : Number(gameMin),
+    );
     const max = await readConfigInt(c, 'pool_max_stake_kobo', 2_000_000);
     if (!Number.isInteger(stake) || stake < min || stake > max) {
       throw new AuthError('invalid_stake', { minStakeKobo: min, maxStakeKobo: max });
@@ -746,7 +932,7 @@ export class MatchesService {
   private async afterChange(matchId: string): Promise<void> {
     const { row, players } = await this.load(this.pool, matchId);
     try {
-      await this.chat.updateGameCard(matchId, cardPayload(row, players));
+      await this.chat.updateGameCard(matchId, cardPayload(row, players, this.entry(row.game_slug)));
     } catch {
       // The card catches up on the next change; the match itself is already stored.
     }
@@ -793,9 +979,10 @@ export class MatchesService {
 
   /** What `viewer` may see: the engine's `view()` for them, never the raw state. */
   private toView(row: MatchRow, players: PlayerRow[], viewer: string): MatchView {
-    const hasState = row.status === 'active' || row.status === 'finished';
+    // 'disputed' is a finished Pool match whose payout waits for a moderator (ADR-039): shown as a result.
+    const finished = row.status === 'finished' || row.status === 'disputed';
+    const hasState = row.status === 'active' || finished;
     const entry = hasState ? this.entry(row.game_slug) : null;
-    const finished = row.status === 'finished';
     return {
       id: row.id,
       gameSlug: row.game_slug,
@@ -805,6 +992,10 @@ export class MatchesService {
       potKobo: potOf(row, players),
       counterStakeKobo: counterOf(row),
       allowCounter: row.allow_counter,
+      options: row.options,
+      variantLabel: variantLabelOf(this.entry(row.game_slug), row.options),
+      turnDeadlineAt:
+        row.status === 'active' && row.turn_deadline ? row.turn_deadline.toISOString() : null,
       status: row.status,
       conversationId: row.conversation_id,
       createdBy: row.created_by,
@@ -838,8 +1029,12 @@ export class MatchesService {
   }
 }
 
-function cardPayload(row: MatchRow, players: PlayerRow[]): GameCardPayload {
-  const finished = row.status === 'finished';
+function cardPayload(
+  row: MatchRow,
+  players: PlayerRow[],
+  entry: EngineEntry | null,
+): GameCardPayload {
+  const finished = row.status === 'finished' || row.status === 'disputed';
   return {
     matchId: row.id,
     gameSlug: row.game_slug,
@@ -850,6 +1045,7 @@ function cardPayload(row: MatchRow, players: PlayerRow[]): GameCardPayload {
     counterStakeKobo: counterOf(row),
     allowCounter: row.allow_counter,
     status: row.status,
+    variantLabel: variantLabelOf(entry, row.options),
     currentTurn: row.status === 'active' ? row.current_turn : null,
     winnerIds: finished ? players.filter((p) => p.result === 'win').map((p) => p.user_id) : null,
     draw: finished && players.every((p) => p.result === 'draw'),

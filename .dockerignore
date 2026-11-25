@@ -1,0 +1,25 @@
+# Build context is the repository root (docker build -f apps/api/Dockerfile .). Keep it small and secret-free.
+.git
+.github
+.husky
+.turbo
+.claude
+**/node_modules
+**/dist
+**/coverage
+**/.dev-db
+**/*.log
+**/*.tsbuildinfo
+.env
+.env.*
+**/.env
+**/.env.*
+!**/.env.example
+docs
+deploy
+README.md
+CLAUDE.md
+# Tests are not shipped
+**/*.test.ts
+**/db/tests
+**/db/testing

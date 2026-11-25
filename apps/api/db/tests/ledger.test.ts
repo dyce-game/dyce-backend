@@ -28,7 +28,7 @@ afterAll(async () => {
 });
 
 describe('welcome grant', () => {
-  it('gives ₦200,000 exactly once, even if called repeatedly', async () => {
+  it('gives Ð200,000 exactly once, even if called repeatedly', async () => {
     const u = await createUser(db);
     expect(await balanceOf(db, u.id)).toBe(0);
     const first = await grant(db, u.id);
@@ -113,7 +113,7 @@ describe('transfer', () => {
     expect(retry.replayed).toBe(true);
   });
 
-  it('two concurrent spends of the last ₦1,000: exactly one succeeds', async () => {
+  it('two concurrent spends of the last Ð1,000: exactly one succeeds', async () => {
     const a = await fundedUser(db);
     const b = await fundedUser(db);
     const c = await fundedUser(db);
@@ -149,7 +149,7 @@ describe('transfer', () => {
     const a = await fundedUser(db);
     const b = await fundedUser(db);
     await expectDyceError(transfer(db, a.id, b.id, 50_001 * NAIRA), 'over_send_limit');
-    // daily limit ₦200,000: four sends of ₦50,000 use it up, then even ₦1 is refused
+    // daily limit Ð200,000: four sends of Ð50,000 use it up, then even Ð1 is refused
     for (let i = 0; i < 4; i++) await transfer(db, a.id, b.id, 50_000 * NAIRA);
     await setBalance(db, a.id, 100_000 * NAIRA); // plenty of money; only the daily limit should stop it
     await expectDyceError(transfer(db, a.id, b.id, 1 * NAIRA), 'over_daily_limit');

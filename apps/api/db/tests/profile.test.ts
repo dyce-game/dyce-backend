@@ -182,7 +182,7 @@ describe('onboarding order and resume', () => {
 });
 
 describe('welcome bonus', () => {
-  it('pays ₦200,000 once, even when claimed repeatedly or concurrently', async () => {
+  it('pays Ð200,000 once, even when claimed repeatedly or concurrently', async () => {
     const id = await bareUser();
     await profiles.createProfile(id, { username: name() });
     const results = await Promise.all([1, 2, 3, 4].map(() => profiles.claimWelcomeBonus(id)));

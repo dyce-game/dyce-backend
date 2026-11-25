@@ -7,7 +7,9 @@ import { AuthModule } from '../auth/auth.module.ts';
 import { TokenService } from '../auth/tokens.ts';
 import { PG_POOL } from '../db/db.module.ts';
 import { ChatController } from './chat.controller.ts';
+import { GroupsService } from './groups.service.ts';
 import { RealtimeHub } from './hub.ts';
+import { MessageActionsService } from './message-actions.service.ts';
 import { MessagesService } from './messages.service.ts';
 import { RealtimeServer } from './realtime.server.ts';
 
@@ -43,6 +45,18 @@ export class RealtimeLifecycle implements OnApplicationBootstrap, OnApplicationS
       provide: MessagesService,
       inject: [PG_POOL, RealtimeHub],
       useFactory: (pool: pg.Pool, hub: RealtimeHub) => new MessagesService(pool, hub),
+    },
+    {
+      provide: GroupsService,
+      inject: [PG_POOL, RealtimeHub, MessagesService],
+      useFactory: (pool: pg.Pool, hub: RealtimeHub, messages: MessagesService) =>
+        new GroupsService(pool, hub, messages),
+    },
+    {
+      provide: MessageActionsService,
+      inject: [PG_POOL, RealtimeHub, MessagesService],
+      useFactory: (pool: pg.Pool, hub: RealtimeHub, messages: MessagesService) =>
+        new MessageActionsService(pool, hub, messages),
     },
     RealtimeLifecycle,
   ],

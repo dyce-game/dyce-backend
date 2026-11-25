@@ -1,4 +1,5 @@
-import type { LiveGame } from '@dyce/games';
+import type { TurnGame } from '@dyce/games';
+import { computeOutcome } from './outcome.ts';
 import type { LiveResultRow, LiveSeat, LiveState } from '@dyce/shared';
 import type { FinalOutcome, LiveMatchStore, LoadedMatch } from './store.ts';
 
@@ -25,6 +26,8 @@ export type LiveMatchOptions = {
   /** Tries (with a pause between) to settle a finished match before giving up until the next restart. */
   settleRetries: number;
   settleRetryMs: number;
+  /** Party rooms only (all optional; see PartyMatch for the defaults). */
+  party?: Partial<PartyOptions>;
 };
 
 export const DEFAULT_OPTIONS: LiveMatchOptions = {
@@ -35,6 +38,23 @@ export const DEFAULT_OPTIONS: LiveMatchOptions = {
   settleRetryMs: 3_000,
 };
 
+/** Timing knobs of a party room. Tests shrink them; production uses the defaults. */
+export type PartyOptions = {
+  /** Real time between engine ticks; defaults to the game's own (1 s). */
+  tickMs: number;
+  /** Pause between ticks while the clock is only waiting for seats that left (a skip-ahead). */
+  skipDelayMs: number;
+  /** Streams (strokes) reach the database at most this often. */
+  streamFlushMs: number;
+  /** Streams reach the other seats at most this often. */
+  streamBroadcastMs: number;
+  /** Smallest gap between two chat lines from one seat. */
+  chatGapMs: number;
+  /** Actions a seat may send in a burst, and the rate it earns them back per second. */
+  actionBurst: number;
+  actionPerSecond: number;
+};
+
 export type MoveRefusal =
   | 'not_running'
   | 'not_seated'
@@ -43,7 +63,10 @@ export type MoveRefusal =
   | 'not_your_turn'
   | 'invalid_action'
   | 'illegal_move'
-  | 'busy';
+  | 'busy'
+  | 'waiting'
+  | 'rate_limited'
+  | 'chat_closed';
 
 export type MoveResult = { ok: true } | { ok: false; code: MoveRefusal; reason?: string };
 
@@ -81,7 +104,7 @@ export class LiveMatch {
 
   constructor(
     private readonly loaded: LoadedMatch,
-    private readonly game: LiveGame,
+    private readonly game: TurnGame,
     private readonly store: LiveMatchStore,
     private readonly sched: Scheduler,
     private readonly onChange: (match: LiveMatch) => void,
@@ -207,6 +230,9 @@ export class LiveMatch {
       seats: this.seatsView(),
       turnUserId: turn,
       turnDeadlineAt: turn ? this.turnDeadlineAt : null,
+      roomKind: 'turns',
+      canAct: turn === userId && !this.isForfeited(userId),
+      waiting: false,
       serverNow: this.sched.now(),
       results: this.results,
     };
@@ -343,37 +369,8 @@ export class LiveMatch {
     await this.advance();
   }
 
-  /** Works out the final ranking: whoever is still in, by the engine's own order, then the forfeits. */
   private outcome(): FinalOutcome {
-    const { engine } = this.game;
-    const out = new Set(this.forfeited);
-    if (this.activeCount() === 0) {
-      // Everybody walked away: nobody wins, every seat is given back what it put in.
-      return { placements: [this.seats.map((s) => s.userId)], draw: true, forfeited: [...out] };
-    }
-    let groups: string[][];
-    let draw = false;
-    if (engine.isTerminal(this.state)) {
-      const r = engine.result(this.state);
-      groups = r.placements.map((g) => g.filter((id) => !out.has(id))).filter((g) => g.length > 0);
-      draw = r.draw && groups.length > 0 && groups[0]!.length > 1 && groups.length === 1;
-    } else {
-      // Everyone else left: the one who stayed wins.
-      groups = this.seats.filter((s) => !out.has(s.userId)).map((s) => [s.userId]);
-    }
-    // The last to forfeit placed better than the first. Players who never appear in the engine's
-    // ranking (they all forfeited) are still ranked.
-    const forfeitGroups = [...this.forfeited].reverse().map((id) => [id]);
-    const ranked = new Set(groups.flat());
-    const missing = this.seats
-      .map((s) => s.userId)
-      .filter((id) => !ranked.has(id) && !out.has(id))
-      .map((id) => [id]);
-    return {
-      placements: [...groups, ...missing, ...forfeitGroups],
-      draw,
-      forfeited: [...this.forfeited],
-    };
+    return computeOutcome(this.game.engine, this.state, this.seats, this.forfeited);
   }
 
   private async finishLocked(): Promise<void> {

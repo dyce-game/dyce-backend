@@ -24,6 +24,14 @@ pnpm test && pnpm test:db && pnpm e2e
 pnpm lint && pnpm typecheck && pnpm format:check
 ```
 
+## The whole backend in containers
+```
+docker compose up --build        # Postgres, migrations, API on :3000, game server on :2567 (development secrets only)
+docker compose down -v           # stop and wipe
+```
+Images: `apps/api/Dockerfile` and `apps/game-server/Dockerfile` (build context = this folder). Production settings: `deploy/production.env.example`.
+Deploying, rolling back and incidents: `../Dyce/docs/RUNBOOK.md`. Launch gate for the ledger: `node apps/api/db/ledger-gate.ts`.
+
 ## Working with the app
 The Expo app is the sibling repo `../Dyce`. It depends on `packages/shared` and `packages/games` through `link:../dyce-backend/packages/*`, so **keep both folders side by side**. Run `pnpm install` here before `pnpm install` there, and read ADR-011 in `docs/DECISIONS.md`.
 

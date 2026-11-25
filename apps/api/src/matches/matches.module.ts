@@ -7,10 +7,14 @@ import { ChatModule } from '../chat/chat.module.ts';
 import { RealtimeHub } from '../chat/hub.ts';
 import { MessagesService } from '../chat/messages.service.ts';
 import { PG_POOL } from '../db/db.module.ts';
+import { IntegrityModule } from '../integrity/integrity.module.ts';
 import { GamesController, MatchesController } from './matches.controller.ts';
 import { MatchesService } from './matches.service.ts';
 
-/** Gives stakes back for invites nobody answered (also done lazily whenever a match is opened). */
+/**
+ * Gives stakes back for invites nobody answered, and settles Pool matches whose clock ran out (both are also done
+ * lazily whenever a match is opened).
+ */
 export class MatchMaintenance {
   constructor(private readonly matches: MatchesService) {}
 
@@ -19,10 +23,16 @@ export class MatchMaintenance {
     const n = await this.matches.expireStaleInvites();
     if (n > 0) new Logger('Matches').log(`expired ${n} stale invites`);
   }
+
+  @Cron('*/5 * * * *')
+  async forfeitOverdue(): Promise<void> {
+    const n = await this.matches.forfeitOverdueMatches();
+    if (n > 0) new Logger('Matches').log(`settled ${n} Pool matches past their turn clock`);
+  }
 }
 
 @Module({
-  imports: [AuthModule, ChatModule],
+  imports: [AuthModule, ChatModule, IntegrityModule],
   controllers: [GamesController, MatchesController],
   providers: [
     {

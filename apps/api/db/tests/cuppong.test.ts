@@ -76,7 +76,7 @@ const throwBall = (u: TestUser, id: string, v: number, aim: number, power: numbe
   matches.submitMove(u.id, id, { expectedVersion: v, action: { kind: 'throw', aim, power } });
 
 describe('catalogue', () => {
-  it('lists Cup Pong (enabled, 3D, async, Free only for now)', async () => {
+  it('lists Cup Pong (enabled, 3D, async, Free or Pool)', async () => {
     const { games } = await matches.listGames();
     expect(games.find((g) => g.slug === 'cup-pong')).toEqual({
       slug: 'cup-pong',
@@ -86,7 +86,8 @@ describe('catalogue', () => {
       minPlayers: 2,
       maxPlayers: 2,
       categories: ['sports'],
-      supportsPool: false,
+      supportsPool: true,
+      poolMinKobo: 10_000,
     });
   });
 });

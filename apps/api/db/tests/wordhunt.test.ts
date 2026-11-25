@@ -89,7 +89,7 @@ const submit = (u: TestUser, id: string, v: number, words: string[]) =>
   matches.submitMove(u.id, id, { expectedVersion: v, action: { kind: 'submit', words } });
 
 describe('catalogue', () => {
-  it('lists Word Hunt (enabled, 2D, async, Free only for now)', async () => {
+  it('lists Word Hunt (enabled, 2D, async, Free or Pool)', async () => {
     const { games } = await matches.listGames();
     expect(games.find((g) => g.slug === 'word-hunt')).toEqual({
       slug: 'word-hunt',
@@ -99,7 +99,8 @@ describe('catalogue', () => {
       minPlayers: 2,
       maxPlayers: 2,
       categories: ['word'],
-      supportsPool: false,
+      supportsPool: true,
+      poolMinKobo: 20_000,
     });
   });
 });

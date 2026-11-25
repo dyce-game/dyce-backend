@@ -9,6 +9,14 @@ export function hashPhone(secret: string, e164: string): Buffer {
   return createHmac('sha256', secret).update(`phone:${e164}`).digest();
 }
 
+/**
+ * Email addresses are never stored either: only HMAC-SHA256(server secret, normalised address). The "email:"
+ * prefix domain-separates it from the phone and OTP hashes that share the secret (ADR-044).
+ */
+export function hashEmail(secret: string, normalizedEmail: string): Buffer {
+  return createHmac('sha256', secret).update(`email:${normalizedEmail}`).digest();
+}
+
 /** OTP codes are 6 digits, so the stored hash is keyed with a server secret and bound to the challenge id. */
 export function hashOtp(secret: string, challengeId: string, code: string): Buffer {
   return createHmac('sha256', secret).update(`otp:${challengeId}:${code}`).digest();

@@ -6,6 +6,7 @@ import { AuthModule } from '../auth/auth.module.ts';
 import { ChatModule } from '../chat/chat.module.ts';
 import { RealtimeHub } from '../chat/hub.ts';
 import { PG_POOL } from '../db/db.module.ts';
+import { IntegrityModule } from '../integrity/integrity.module.ts';
 import { HttpGameRooms, NoGameRooms } from './game-rooms.ts';
 import { SpacesController } from './spaces.controller.ts';
 import { SpacesService, type GameRooms } from './spaces.service.ts';
@@ -22,8 +23,9 @@ export class SpaceMaintenance {
 }
 
 @Module({
-  imports: [AuthModule, ChatModule],
+  imports: [AuthModule, ChatModule, IntegrityModule],
   controllers: [SpacesController],
+  exports: [SpacesService],
   providers: [
     {
       provide: SpacesService,

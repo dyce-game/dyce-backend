@@ -326,6 +326,7 @@ try {
     ['tunde.c'],
   );
   assert.deepEqual(Object.keys(r.json.friends[0]).sort(), [
+    'avatar',
     'displayName',
     'id',
     'since',
@@ -593,7 +594,7 @@ try {
   r = await call('GET', '/conversations', { token: s3.accessToken });
   const cardChat = r.json.conversations.find((c) => c.peer.username === 'ada.o');
   assert.equal(cardChat.lastMessage.kind, 'money_sent');
-  assert.equal(cardChat.lastMessage.body, 'Sent ₦1,500 · suya');
+  assert.equal(cardChat.lastMessage.body, 'Sent Ð1,500 · suya');
 
   // tunde asks by code; ada pays it; a stranger can look but not read receipts
   r = await call('POST', '/wallet/requests', {

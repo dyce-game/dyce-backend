@@ -41,6 +41,16 @@ export interface LiveMatchStore {
     currentTurn: string | null;
     turnDeadline: Date | null;
   }): Promise<void>;
+  /**
+   * Party rooms: appends moves `moves[0].seq` .. `moves[n-1].seq` (contiguous; a tick the room applied has
+   * no player) and stores the state after the last one, in one transaction. Throws `version_conflict` if
+   * the match is not at `moves[0].seq - 1`.
+   */
+  saveMoves(m: {
+    matchId: string;
+    moves: { seq: number; userId: string | null; action: unknown }[];
+    state: unknown;
+  }): Promise<void>;
   saveForfeits(matchId: string, forfeited: string[]): Promise<void>;
   /** Writes placements and results, settles the pot (Pool) and closes the space. Idempotent. */
   finish(matchId: string, outcome: FinalOutcome, finalState: unknown): Promise<LiveResultRow[]>;
@@ -112,6 +122,39 @@ export class PgLiveMatchStore implements LiveMatchStore {
     }
   }
 
+  async saveMoves(m: Parameters<LiveMatchStore['saveMoves']>[0]): Promise<void> {
+    const first = m.moves[0];
+    const last = m.moves[m.moves.length - 1];
+    if (!first || !last) return;
+    const c = await this.pool.connect();
+    try {
+      await c.query('BEGIN');
+      const upd = await c.query(
+        `UPDATE matches SET state = $2::jsonb, state_version = $3, current_turn = NULL, turn_deadline = NULL
+          WHERE id = $1 AND status = 'active' AND state_version = $4`,
+        [m.matchId, JSON.stringify(m.state), last.seq, first.seq - 1],
+      );
+      if (upd.rowCount !== 1) throw new Error('version_conflict');
+      await c.query(
+        `INSERT INTO match_moves (match_id, seq, user_id, action)
+         SELECT $1, s.seq, s.user_id, s.action::jsonb
+           FROM unnest($2::int[], $3::uuid[], $4::text[]) AS s(seq, user_id, action)`,
+        [
+          m.matchId,
+          m.moves.map((x) => x.seq),
+          m.moves.map((x) => x.userId),
+          m.moves.map((x) => JSON.stringify(x.action)),
+        ],
+      );
+      await c.query('COMMIT');
+    } catch (err) {
+      await c.query('ROLLBACK').catch(() => undefined);
+      throw err;
+    } finally {
+      c.release();
+    }
+  }
+
   async saveForfeits(matchId: string, forfeited: string[]): Promise<void> {
     await this.pool.query(
       `UPDATE matches SET live_meta = jsonb_set(live_meta, '{forfeited}', $2::jsonb) WHERE id = $1`,
@@ -159,7 +202,7 @@ export class PgLiveMatchStore implements LiveMatchStore {
         }
         // Free: marks the match finished. Pool: pays the escrow out by placement in this same
         // transaction, so a finished match and its payouts can never disagree.
-        await c.query(`SELECT settle_match($1)`, [matchId]);
+        await c.query(`SELECT settle_or_hold($1)`, [matchId]);
         // settle_match rewrites staked players' results to win/loss/draw: put the forfeits back.
         if (outcome.forfeited.length > 0) {
           await c.query(
