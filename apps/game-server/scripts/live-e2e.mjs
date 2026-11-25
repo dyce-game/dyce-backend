@@ -269,6 +269,20 @@ const play = async (bots, what) => {
     b.brain && b.room.send('sync');
   }
   await until(() => bots.every((b) => b.state?.status === 'finished'), `${what} to finish`);
+  // The table shows "finished" a moment before the server has written the result and the payout to the database (the
+  // players see it first, the money follows): wait for the match row to close before anything reads the database.
+  const ids = bots.map((b) => b.user.id);
+  await until(
+    async () =>
+      (
+        await admin.query(
+          `SELECT 1 FROM matches m JOIN match_players mp ON mp.match_id = m.id
+            WHERE mp.user_id = ANY($1::uuid[]) AND m.status = 'active' LIMIT 1`,
+          [ids],
+        )
+      ).rowCount === 0,
+    `${what} to be settled in the database`,
+  );
   // A bot answers every state it sees, so it can send a move a moment after the table moved on: those
   // races are refused politely (not your turn, wrong phase, game over). Anything else is a bug.
   for (const b of bots) {
@@ -290,6 +304,10 @@ try {
   });
   await migrate(admin);
   await admin.query(`CREATE ROLE dyce_app LOGIN PASSWORD 'dyce_app' IN ROLE dyce_api`);
+  // The bots here answer faster than a person can, which the anti-cheat treats as a signal (apps/api/db/migrations/0025):
+  // on a fast machine that is enough to HOLD a Pool payout for a moderator. This script proves the rooms and the money,
+  // not the anti-cheat (that has its own database tests), so the hold threshold is raised out of reach.
+  await admin.query(`UPDATE app_config SET value = '1000' WHERE key = 'integrity_hold_threshold'`);
 
   const dbUrl = `postgres://dyce_app:dyce_app@127.0.0.1:${pgPort}/dyce`;
   const spawnProc = (cwd, env) => {
@@ -444,7 +462,17 @@ try {
       payoutScheme: 'p50_30_20',
     });
     const bots = await seat(space, users, [crazyBrain]);
-    for (const b of bots) assert.equal(b.first.view.hand.length, 7); // seven each, dealt by the server
+    // Seven each, dealt by the server. The first bot to connect sees the untouched deal; a bot that connects after the table
+    // has already moved can legitimately see more (the first player may have played a Wild Draw Four on it), so the exact
+    // count is asserted only for a first view taken at the same version as the first bot's.
+    for (const b of bots) {
+      if (b.first.version === bots[0].first.version) assert.equal(b.first.view.hand.length, 7);
+      else
+        assert.ok(
+          b.first.view.hand.length >= 7,
+          'a late joiner holds at least the seven it was dealt',
+        );
+    }
     await play(bots, 'crazy cards');
     const rows = (
       await admin.query(
@@ -455,6 +483,7 @@ try {
     assert.equal(
       rows.reduce((n, r) => n + Number(r.payout_kobo), 0),
       FEE * 3,
+      `crazy cards payouts (match is ${JSON.stringify(await matchRow(space.matchId).then((m) => m.status))}; rows ${JSON.stringify(rows)})`,
     );
     await ledgerClean('crazy cards');
     for (const b of bots) b.room.leave();

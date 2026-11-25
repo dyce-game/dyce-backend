@@ -92,19 +92,19 @@ jobs:
     timeout-minutes: 30
     environment: ${{ needs.plan.outputs.env }} # production has required reviewers: that is the approval step
     env:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_GAME }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_GAME || secrets.FLY_DEPLOY_TOKEN }}
       APP: ${{ needs.plan.outputs.game_app }}
       CONFIG: apps/game-server/fly${{ needs.plan.outputs.suffix }}.toml
     steps:
       - name: Say so if the token is missing
         run: |
-          if [ -z "$FLY_API_TOKEN" ]; then echo "::error::The FLY_API_TOKEN_GAME secret is missing from the '${{ needs.plan.outputs.env }}' environment (deploy/FLY.md section 7)."; exit 1; fi
+          if [ -z "$FLY_API_TOKEN" ]; then echo "::error::No FLY_API_TOKEN_GAME (or FLY_DEPLOY_TOKEN) secret in the '${{ needs.plan.outputs.env }}' environment (deploy/FLY.md section 7)."; exit 1; fi
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
       # A restart forfeits every live Pool match (Dyce docs/RUNBOOK.md section 8): the summary reminds whoever approved.
       - name: Deploy
         run: >
-          flyctl deploy --config "$CONFIG" --dockerfile apps/game-server/Dockerfile --remote-only
+          flyctl deploy --config "$CONFIG" --remote-only
           --build-arg RELEASE=${GITHUB_SHA::12}
       - name: It is serving this commit
         run: |
@@ -124,7 +124,7 @@ jobs:
     timeout-minutes: 30
     environment: ${{ needs.plan.outputs.env }}
     env:
-      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API }}
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN_API || secrets.FLY_DEPLOY_TOKEN }}
       APP: ${{ needs.plan.outputs.api_app }}
       CONFIG: apps/api/fly${{ needs.plan.outputs.suffix }}.toml
       ENVIRONMENT: ${{ needs.plan.outputs.env }}
@@ -132,7 +132,7 @@ jobs:
     steps:
       - name: Say so if the token is missing
         run: |
-          if [ -z "$FLY_API_TOKEN" ]; then echo "::error::The FLY_API_TOKEN_API secret is missing from the '$ENVIRONMENT' environment (deploy/FLY.md section 7)."; exit 1; fi
+          if [ -z "$FLY_API_TOKEN" ]; then echo "::error::No FLY_API_TOKEN_API (or FLY_DEPLOY_TOKEN) secret in the '$ENVIRONMENT' environment (deploy/FLY.md section 7)."; exit 1; fi
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -161,7 +161,7 @@ jobs:
       - uses: superfly/flyctl-actions/setup-flyctl@master
       - name: Deploy
         run: >
-          flyctl deploy --config "$CONFIG" --dockerfile apps/api/Dockerfile --remote-only
+          flyctl deploy --config "$CONFIG" --remote-only
           --build-arg RELEASE=${GITHUB_SHA::12}
       - name: It is serving this commit, and the database is reachable
         run: |

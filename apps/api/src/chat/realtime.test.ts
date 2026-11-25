@@ -199,6 +199,9 @@ describe('RealtimeServer', () => {
     await c.opened;
     c.ws.send(auth('token-expiring-a'));
     expect(await c.closed).toMatchObject({ code: 4403, reason: 'token_expired' });
+    // The client sees the close frame a moment before the server finishes its own clean-up (slower on Linux CI runners):
+    // wait for the hub to notice instead of asserting in the same tick.
+    for (let i = 0; i < 50 && hub.isOnline(A); i++) await new Promise((r) => setTimeout(r, 20));
     expect(hub.isOnline(A)).toBe(false);
   });
 

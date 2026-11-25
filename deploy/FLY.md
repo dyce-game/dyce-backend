@@ -57,9 +57,9 @@ production if anything required is missing (the message names the variable). Gen
 Run from the **repository root**. Deploy the **game server first** (the API only needs its address), the API second.
 
 ```bash
-fly deploy --config apps/game-server/fly.toml --dockerfile apps/game-server/Dockerfile --remote-only \
+fly deploy --config apps/game-server/fly.toml --remote-only \
            --build-arg RELEASE=$(git rev-parse --short=12 HEAD)
-fly deploy --config apps/api/fly.toml --dockerfile apps/api/Dockerfile --remote-only \
+fly deploy --config apps/api/fly.toml --remote-only \
            --build-arg RELEASE=$(git rev-parse --short=12 HEAD)
 ```
 
@@ -109,13 +109,52 @@ or deploy `main` to staging.
 
 1. Create the four Fly apps (section 2) and set their secrets (section 3; staging uses the staging database). Both API apps also need `MIGRATION_DATABASE_URL`
    (the owner role of that environment's database): staging uses it in the release command, production for the by-hand migrations.
-2. Create deploy tokens, **one per app** (they cannot touch other apps): `fly tokens create deploy --app dyce-backend-staging` and the same for the other three.
+2. Create the Fly token(s) (section 7a below): either one deploy token **per app** or one **organisation** token for all four.
 3. In GitHub (Settings > Environments) create **`staging`** and **`production`**. On `production` add **required reviewers** (not only the person who merges).
-   Add the environment secrets: `FLY_API_TOKEN_API` (the API app's token) and `FLY_API_TOKEN_GAME` (the game server's token), different values in each environment.
+   Add the environment secrets: `FLY_API_TOKEN_API` (the API app's token) and `FLY_API_TOKEN_GAME` (the game server's token), different values in each environment;
+   or, with one organisation token, the single secret `FLY_DEPLOY_TOKEN` (used when the per-app one is absent).
 4. Set the repository variable **`FLY_DEPLOY` = `true`**. Until then the deploy jobs are skipped (CI still runs), so it is safe to merge before the accounts exist.
 5. Protect `staging` and `main` and require the CI checks, as in the app's `CI_CD.md` section 5.
 
 Deploying the game server restarts it and **forfeits every live Pool match** (`RUNBOOK.md` section 8): approve a production run when few rooms are open.
+
+### 7a. Getting the Fly token
+
+You are logged in to `flyctl` already (`fly auth whoami`). From a terminal, **one app, one token** (safest: a leaked token can deploy that app only):
+
+```bash
+fly tokens create deploy --app dyce-game-server --name github-production-game
+fly tokens create deploy --app dyce-backend     --name github-production-api
+# staging, after the two apps exist (section 2):
+fly tokens create deploy --app dyce-game-server-staging --name github-staging-game
+fly tokens create deploy --app dyce-backend-staging     --name github-staging-api
+```
+
+or **one token for all four apps** (simpler, broader: it can deploy and change every app in the organisation):
+
+```bash
+fly tokens create org --org personal --name github-deploy
+```
+
+The command prints a long string that starts with `FlyV1 `; **copy all of it, including `FlyV1`**. It is shown once. In the dashboard the same thing is
+at fly.io > your organisation > **Tokens**. Never paste a token into a chat, a commit or a screenshot. Where it goes:
+
+| Use                           | Where                                                                           | Name                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| GitHub deploys                | repo > Settings > Environments > `staging` / `production` > Environment secrets | `FLY_API_TOKEN_GAME` and `FLY_API_TOKEN_API` (one token per app), or `FLY_DEPLOY_TOKEN` (an organisation token)                         |
+| Deploys from your own machine | the git-ignored `.env` at the repository root                                   | `FLY_DEPLOY_TOKEN=...`; run `set -a; . ./.env; set +a; FLY_API_TOKEN="$FLY_DEPLOY_TOKEN" fly deploy ...` (flyctl reads `FLY_API_TOKEN`) |
+
+Revoke one with `fly tokens list` and `fly tokens revoke <id>` (or in the dashboard) if it leaks.
+
+### 7b. The Fly dashboard's own GitHub integration
+
+An app created from the Fly dashboard ("first launch from the dashboard") has its own **Working directory** (it was `./apps/game-server`) and builds with
+that folder as the context, which fails here ("`/apps/game-server`: not found") because the Dockerfile copies from the repository root. Either:
+
+- **Use only the GitHub workflow (recommended).** In the Fly dashboard open the app > **GitHub / Deployments** and disconnect the repository (or turn "Deploy on push" off,
+  which it already is). Deploys then come from `deploy-fly.yml` and from the commands in section 4.
+- **Or fix the integration:** Working directory = the repository root (empty or `.`), fly.toml path = `apps/game-server/fly.toml` (`apps/api/fly.toml` for the API), branch = `main`.
+  The `[build] dockerfile` line in each config finds the Dockerfile next to it. Do not run both: two systems deploying the same app race each other.
 
 ## 8. Limits, scaling and rollback
 

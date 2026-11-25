@@ -10,6 +10,13 @@ strictPeerDependencies: false
 verifyDepsBeforeRun: false
 
 allowBuilds:
+  # The embedded PostgreSQL used by the tests ships one package per platform; each has a postinstall that links its
+  # binaries. pnpm 11 fails an install with an undecided build script, and CI (Linux) installs the linux one.
+  # Windows works without it here, so it stays off; every platform a developer or CI machine can be gets an answer.
   '@embedded-postgres/windows-x64': false
+  '@embedded-postgres/linux-x64': true
+  '@embedded-postgres/linux-arm64': true
+  '@embedded-postgres/darwin-x64': true
+  '@embedded-postgres/darwin-arm64': true
   '@swc/core': true
   msgpackr-extract: false

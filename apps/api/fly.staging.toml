@@ -3,11 +3,10 @@
 #
 # Deploy (from the repository root, not from apps/api):
 #
-#   fly deploy --config apps/api/fly.staging.toml --dockerfile apps/api/Dockerfile --remote-only \
+#   fly deploy --config apps/api/fly.staging.toml --remote-only \
 #              --build-arg RELEASE=$(git rev-parse --short=12 HEAD)
 #
-# `--config` only chooses this file; the context is the directory you run the command in. The Dockerfile is given on the
-# command line (not under [build]) so that its path is relative to that same directory with no guessing.
+# `--config` only chooses this file; the context is the directory you run the command in. The Dockerfile is named under [build].
 # Full steps, secrets, migrations, domains and rollback: deploy/FLY.md.
 
 app = 'dyce-backend-staging'
@@ -19,7 +18,10 @@ kill_signal = 'SIGTERM'
 kill_timeout = 40 # seconds: more than SHUTDOWN_DRAIN_MS (5s) + SHUTDOWN_TIMEOUT_MS (25s)
 
 [build]
-# Intentionally empty: see the deploy command above.
+# Relative to THIS file (tested with flyctl 0.5.17), so it is right wherever the config lives. The build CONTEXT is the
+# directory `fly deploy` runs in, and that must be the repository root: the Fly dashboard's "Working directory" must be
+# the repository root too (deploy/FLY.md section 7).
+dockerfile = 'Dockerfile'
 
 [env]
 # Non-secret settings only. Everything secret is set with `fly secrets set` (deploy/FLY.md section 3).
