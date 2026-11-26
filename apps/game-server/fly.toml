@@ -1,54 +1,42 @@
-# Fly.io configuration for the Dyce game server (Colyseus: live rooms, party games, card tables). A SECOND Fly app,
-# separate from the API (apps/api/fly.toml). Build context = the repository root.
+# fly.toml app configuration file generated for dyce-game-server on 2026-11-26T08:14:31Z
 #
-#   fly deploy --config apps/game-server/fly.toml --remote-only \
-#              --build-arg RELEASE=$(git rev-parse --short=12 HEAD)
+# See https://docs.fly.io/reference/configuration for information about how to use this file.
 #
-# Full steps: deploy/FLY.md.
 
 app = 'dyce-game-server'
-primary_region = 'ams' # same region as the API and the database
-
-# On SIGTERM the server answers 503 on /health/ready and refuses new rooms for SHUTDOWN_DRAIN_MS, then closes.
+primary_region = 'ams'
 kill_signal = 'SIGTERM'
-kill_timeout = 40 # seconds: more than SHUTDOWN_DRAIN_MS (5s) + SHUTDOWN_TIMEOUT_MS (25s)
+kill_timeout = '40s'
 
 [build]
-# Relative to THIS file (tested with flyctl 0.5.17), so it is right wherever the config lives. The build CONTEXT is the
-# directory `fly deploy` runs in, and that must be the repository root: the Fly dashboard's "Working directory" must be
-# the repository root too (deploy/FLY.md section 7).
-dockerfile = 'Dockerfile'
+  dockerfile = 'Dockerfile'
 
 [env]
-NODE_ENV = 'production'
-PORT = '2567'
-LOG_FORMAT = 'json'
-SHUTDOWN_DRAIN_MS = '5000'
-SHUTDOWN_TIMEOUT_MS = '25000'
-RECONNECT_SECONDS = '60'
-JOIN_GRACE_SECONDS = '90'
+  JOIN_GRACE_SECONDS = '90'
+  LOG_FORMAT = 'json'
+  NODE_ENV = 'production'
+  PORT = '2567'
+  RECONNECT_SECONDS = '60'
+  SHUTDOWN_DRAIN_MS = '5000'
+  SHUTDOWN_TIMEOUT_MS = '25000'
 
 [http_service]
-internal_port = 2567
-force_https = true
-# A room lives in this process's memory and the API addresses the game server by ONE URL, so there is exactly one
-# machine and it is never stopped for being idle (Dyce docs/RUNBOOK.md sections 8 and 12). Restarting it forfeits every
-# live Pool match (RUNBOOK section 8): deploy it when few rooms are open.
-auto_stop_machines = 'off'
-auto_start_machines = true
-min_machines_running = 1
+  internal_port = 2567
+  force_https = true
+  auto_stop_machines = 'off'
+  auto_start_machines = true
+  min_machines_running = 1
 
-  # Phones keep a WebSocket open for the whole game; do not let an idle socket be cut under a minute.
   [http_service.http_options]
     idle_timeout = 600
 
   [[http_service.checks]]
-    method = 'GET'
-    path = '/health/ready'
     interval = '15s'
     timeout = '5s'
     grace_period = '30s'
+    method = 'GET'
+    path = '/health/ready'
 
 [[vm]]
-size = 'shared-cpu-1x'
-memory = '1gb'
+  size = 'shared-cpu-1x'
+  memory = '1gb'
